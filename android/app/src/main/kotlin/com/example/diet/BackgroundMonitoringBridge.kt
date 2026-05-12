@@ -9,6 +9,7 @@ import android.os.Build
 import android.provider.Settings
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.Calendar
 
 class BackgroundMonitoringBridge(private val context: Context) : MethodChannel.MethodCallHandler {
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -58,10 +59,23 @@ class BackgroundMonitoringBridge(private val context: Context) : MethodChannel.M
 
     private fun statusMap(): Map<String, Any?> {
         val prefs = BackgroundPrefs.prefs(context)
-        val status = prefs.getString(
+        var status = prefs.getString(
             BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus),
             "idle"
         )
+        val todayKey = dateKey(System.currentTimeMillis())
+        val evaluatedToday = prefs.getString(
+            BackgroundPrefs.flutterKey(BackgroundPrefs.keyEvaluatedDateKey),
+            null
+        ) == todayKey
+        if (status == "active" && evaluatedToday) {
+            status = "evaluated"
+            prefs.edit()
+                .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus), status)
+                .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStepBaseline))
+                .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLatestStepCounter))
+                .apply()
+        }
         val exactAvailable = LunchActivityScheduler.canScheduleExact(context)
         val degraded = prefs.getString(
             BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastDegradedReason),
@@ -86,7 +100,16 @@ class BackgroundMonitoringBridge(private val context: Context) : MethodChannel.M
                 prefs.getString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyEndedAt), null)
             ),
             "steps" to BackgroundPrefs.getInt(context, BackgroundPrefs.keySteps),
-            "distanceMeters" to BackgroundPrefs.getDouble(context, BackgroundPrefs.keyDistanceMeters)
+            "distanceMeters" to BackgroundPrefs.getDouble(context, BackgroundPrefs.keyDistanceMeters),
+            "elevationGainMeters" to BackgroundPrefs.getDouble(
+                context,
+                BackgroundPrefs.keyElevationGainMeters
+            ),
+            "baselineAltitudeMeters" to BackgroundPrefs.getDouble(
+                context,
+                BackgroundPrefs.keyBaselineAltitudeMeters,
+                Double.NaN
+            ).takeUnless { it.isNaN() }
         )
     }
 
@@ -116,5 +139,10 @@ class BackgroundMonitoringBridge(private val context: Context) : MethodChannel.M
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun dateKey(millis: Long): String {
+        val calendar = Calendar.getInstance().apply { timeInMillis = millis }
+        return "${calendar.get(Calendar.YEAR)}-${calendar.get(Calendar.MONTH) + 1}-${calendar.get(Calendar.DAY_OF_MONTH)}"
     }
 }

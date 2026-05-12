@@ -9,6 +9,7 @@ import '../../../../platform/sms/sms_service.dart';
 import '../data/repositories/device_activity_sensor_repository.dart';
 import '../data/repositories/device_alert_repository.dart';
 import '../data/repositories/device_background_monitoring_coordinator.dart';
+import '../data/repositories/local_onboarding_repository.dart';
 import '../data/repositories/device_permission_repository.dart';
 import '../data/repositories/local_settings_repository.dart';
 import '../data/repositories/shared_preferences_activity_session_store.dart';
@@ -16,6 +17,7 @@ import '../domain/repositories/activity_sensor_repository.dart';
 import '../domain/repositories/activity_session_store.dart';
 import '../domain/repositories/alert_repository.dart';
 import '../domain/repositories/background_monitoring_coordinator.dart';
+import '../domain/repositories/onboarding_repository.dart';
 import '../domain/repositories/permission_repository.dart';
 import '../domain/repositories/settings_repository.dart';
 
@@ -23,6 +25,10 @@ final clockProvider = Provider<Clock>((ref) => const SystemClock());
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
   (ref) => LocalSettingsRepository(),
+);
+
+final onboardingRepositoryProvider = Provider<OnboardingRepository>(
+  (ref) => LocalOnboardingRepository(),
 );
 
 final activitySensorRepositoryProvider = Provider<ActivitySensorRepository>(

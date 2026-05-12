@@ -7,12 +7,14 @@ class EvaluateActivity {
   ActivityEvaluation call({
     required int steps,
     required double distanceMeters,
+    required double elevationGainMeters,
     required ActivityThreshold threshold,
     required DateTime evaluatedAt,
   }) {
     return ActivityEvaluation(
       steps: steps,
       distanceMeters: distanceMeters,
+      elevationGainMeters: elevationGainMeters,
       threshold: threshold,
       evaluatedAt: evaluatedAt,
     );

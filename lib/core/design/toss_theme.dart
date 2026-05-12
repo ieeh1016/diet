@@ -149,6 +149,29 @@ class TossTheme {
           ),
         ),
       ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: TossColors.white,
+        surfaceTintColor: Colors.transparent,
+        indicatorColor: TossColors.blue50,
+        elevation: 0,
+        height: 68,
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return TextStyle(
+            color: selected ? TossColors.blue : TossColors.gray500,
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+            letterSpacing: 0,
+          );
+        }),
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return IconThemeData(
+            color: selected ? TossColors.blue : TossColors.gray500,
+            size: 23,
+          );
+        }),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: TossColors.gray50,
@@ -178,6 +201,21 @@ class TossTheme {
           letterSpacing: 0,
         ),
         prefixIconColor: TossColors.gray500,
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: TossColors.white,
+        surfaceTintColor: Colors.transparent,
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: TossColors.gray900,
+        contentTextStyle: const TextStyle(
+          color: TossColors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0,
+        ),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }

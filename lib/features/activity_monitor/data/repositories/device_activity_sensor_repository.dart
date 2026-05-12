@@ -22,6 +22,8 @@ class DeviceActivitySensorRepository implements ActivitySensorRepository {
         longitude: position.longitude,
         accuracyMeters: position.accuracy,
         timestamp: position.timestamp,
+        altitudeMeters: position.altitude,
+        altitudeAccuracyMeters: position.altitudeAccuracy,
       ),
     );
   }

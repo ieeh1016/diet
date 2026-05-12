@@ -33,9 +33,15 @@ void main() {
       overrides: [
         clockProvider.overrideWithValue(clock as Clock),
         settingsRepositoryProvider.overrideWithValue(settingsRepository),
+        onboardingRepositoryProvider.overrideWithValue(
+          FakeOnboardingRepository(completed: true),
+        ),
         activitySensorRepositoryProvider.overrideWithValue(sensorRepository),
         permissionRepositoryProvider.overrideWithValue(
           FakePermissionRepository(),
+        ),
+        healthConnectPlatformServiceProvider.overrideWithValue(
+          FakeHealthConnectPlatformService(),
         ),
         alertRepositoryProvider.overrideWithValue(alertRepository),
         backgroundMonitoringCoordinatorProvider.overrideWithValue(coordinator),
@@ -45,7 +51,7 @@ void main() {
     addTearDown(sensorRepository.dispose);
 
     container.listen(activityMonitorViewModelProvider, (_, _) {});
-    await Future<void>.delayed(Duration.zero);
+    await _waitForInitialLoad(container);
 
     final viewModel = container.read(activityMonitorViewModelProvider.notifier);
     await viewModel.startMonitoring();
@@ -71,9 +77,15 @@ void main() {
           FakeClock(DateTime(2026, 5, 11, 9)) as Clock,
         ),
         settingsRepositoryProvider.overrideWithValue(settingsRepository),
+        onboardingRepositoryProvider.overrideWithValue(
+          FakeOnboardingRepository(completed: true),
+        ),
         activitySensorRepositoryProvider.overrideWithValue(sensorRepository),
         permissionRepositoryProvider.overrideWithValue(
           FakePermissionRepository(),
+        ),
+        healthConnectPlatformServiceProvider.overrideWithValue(
+          FakeHealthConnectPlatformService(),
         ),
         alertRepositoryProvider.overrideWithValue(FakeAlertRepository()),
         backgroundMonitoringCoordinatorProvider.overrideWithValue(coordinator),
@@ -83,7 +95,7 @@ void main() {
     addTearDown(sensorRepository.dispose);
 
     container.listen(activityMonitorViewModelProvider, (_, _) {});
-    await Future<void>.delayed(Duration.zero);
+    await _waitForInitialLoad(container);
 
     const updated = ActivityMonitorSettings(
       threshold: ActivityThreshold(
@@ -111,4 +123,60 @@ void main() {
       'Parent',
     );
   });
+
+  test('onboarding completion is saved and hides onboarding', () async {
+    final onboardingRepository = FakeOnboardingRepository();
+    final sensorRepository = FakeSensorRepository();
+    final container = ProviderContainer(
+      overrides: [
+        clockProvider.overrideWithValue(
+          FakeClock(DateTime(2026, 5, 11, 9)) as Clock,
+        ),
+        settingsRepositoryProvider.overrideWithValue(
+          FakeSettingsRepository(ActivityMonitorSettings.defaults),
+        ),
+        onboardingRepositoryProvider.overrideWithValue(onboardingRepository),
+        activitySensorRepositoryProvider.overrideWithValue(sensorRepository),
+        permissionRepositoryProvider.overrideWithValue(
+          FakePermissionRepository(),
+        ),
+        healthConnectPlatformServiceProvider.overrideWithValue(
+          FakeHealthConnectPlatformService(),
+        ),
+        alertRepositoryProvider.overrideWithValue(FakeAlertRepository()),
+        backgroundMonitoringCoordinatorProvider.overrideWithValue(
+          FakeBackgroundMonitoringCoordinator(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    addTearDown(sensorRepository.dispose);
+
+    container.listen(activityMonitorViewModelProvider, (_, _) {});
+    await _waitForInitialLoad(container);
+
+    expect(
+      container.read(activityMonitorViewModelProvider).isOnboardingVisible,
+      isTrue,
+    );
+
+    await container
+        .read(activityMonitorViewModelProvider.notifier)
+        .completeOnboarding();
+
+    final state = container.read(activityMonitorViewModelProvider);
+    expect(onboardingRepository.completed, isTrue);
+    expect(onboardingRepository.markCompletedCount, 1);
+    expect(state.isOnboardingVisible, isFalse);
+    expect(state.isOnboardingCompleted, isTrue);
+  });
+}
+
+Future<void> _waitForInitialLoad(ProviderContainer container) async {
+  for (var index = 0; index < 20; index += 1) {
+    if (container.read(activityMonitorViewModelProvider).isInitialized) {
+      return;
+    }
+    await Future<void>.delayed(Duration.zero);
+  }
 }

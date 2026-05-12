@@ -54,13 +54,13 @@ class MainActivity : FlutterFragmentActivity() {
                         }
 
                         try {
-                            SmsManager.getDefault().sendTextMessage(
-                                phoneNumber,
-                                null,
-                                message,
-                                null,
-                                null
-                            )
+                            val smsManager = SmsManager.getDefault()
+                            val parts = smsManager.divideMessage(message)
+                            if (parts.size > 1) {
+                                smsManager.sendMultipartTextMessage(phoneNumber, null, parts, null, null)
+                            } else {
+                                smsManager.sendTextMessage(phoneNumber, null, message, null, null)
+                            }
                             result.success(true)
                         } catch (error: Exception) {
                             result.error("sms_failed", error.message, null)

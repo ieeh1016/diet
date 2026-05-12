@@ -24,18 +24,24 @@ import androidx.core.app.NotificationCompat
 import java.time.Instant
 import java.util.Calendar
 import kotlin.math.max
+import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class LunchActivityForegroundService : Service(), LocationListener, SensorEventListener {
     private val serviceNotificationId = 1101
     private val alertNotificationId = 1300
     private val serviceChannelId = "lunch_activity_service"
-    private val alertChannelId = "activity_safety_alerts"
+    private val alertChannelId = "diet_project_alerts"
+    private val maxReliableLocationAccuracyMeters = 50f
+    private val minimumDistanceMetersPerWindow = 10.0
+    private val minimumWalkingSpeedMetersPerSecond = 0.3
+    private val maximumWalkingSpeedMetersPerSecond = 3.0
 
     private var locationManager: LocationManager? = null
     private var sensorManager: SensorManager? = null
@@ -56,7 +62,7 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             LunchActivityScheduler.actionEvaluate -> evaluateAndStop()
             LunchActivityScheduler.actionCancel -> {
                 stopMonitoringSensors()
-                stopSelf()
+                finishService(scheduleNext = false)
             }
             else -> startMonitoring()
         }
@@ -79,11 +85,16 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStartedAt), Instant.ofEpochMilli(now).toString())
             .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keySteps, 0) }
             .also { BackgroundPrefs.putDouble(it, BackgroundPrefs.keyDistanceMeters, 0.0) }
+            .also { BackgroundPrefs.putDouble(it, BackgroundPrefs.keyElevationGainMeters, 0.0) }
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastLatitude))
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastLongitude))
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastAccuracy))
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastTimestamp))
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStepBaseline))
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLatestStepCounter))
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyBaselineAltitudeMeters))
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyBaselineAltitudeSumMeters))
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyBaselineAltitudeSampleCount))
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastDegradedReason))
             .apply()
 
@@ -98,11 +109,17 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         val prefs = BackgroundPrefs.prefs(this)
         val sensorSteps = BackgroundPrefs.getInt(this, BackgroundPrefs.keySteps)
         val distanceMeters = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyDistanceMeters)
+        val elevationGainMeters = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyElevationGainMeters)
         val minimumSteps = BackgroundPrefs.getInt(this, BackgroundPrefs.keyMinimumSteps, 2000)
         val minimumDistanceMeters = BackgroundPrefs.getDouble(
             this,
             BackgroundPrefs.keyMinimumDistanceMeters,
             1000.0
+        )
+        val minimumElevationGainMeters = BackgroundPrefs.getDouble(
+            this,
+            BackgroundPrefs.keyMinimumElevationGainMeters,
+            50.0
         )
         val now = System.currentTimeMillis()
         val todayKey = dateKey(now)
@@ -112,46 +129,124 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         ) == todayKey
 
         if (alreadyEvaluatedToday) {
-            stopMonitoringSensors()
-            LunchActivityScheduler.scheduleNextWeekday(this)
-            stopForeground(STOP_FOREGROUND_DETACH)
-            stopSelf()
+            finishAlreadyEvaluated(
+                prefs = prefs,
+                steps = sensorSteps,
+                distanceMeters = distanceMeters,
+                elevationGainMeters = elevationGainMeters,
+                minimumSteps = minimumSteps,
+                minimumDistanceMeters = minimumDistanceMeters,
+                minimumElevationGainMeters = minimumElevationGainMeters,
+                now = now,
+                todayKey = todayKey
+            )
             return
         }
 
         serviceScope.launch {
-            val window = todayWindow(now)
-            val stepReadResult = withContext(Dispatchers.IO) {
-                HealthConnectSteps.readStepsAggregate(
-                    this@LunchActivityForegroundService,
-                    window.first,
-                    window.second
+            try {
+                val window = todayWindow(now)
+                val stepReadResult = withContext(Dispatchers.IO) {
+                    withTimeoutOrNull(10_000L) {
+                        HealthConnectSteps.readStepsAggregate(
+                            this@LunchActivityForegroundService,
+                            window.first,
+                            window.second
+                        )
+                    }
+                } ?: HealthConnectStepReadResult(
+                    steps = null,
+                    successful = false,
+                    message = "Health Connect 걸음수 보정 시간이 초과되어 센서 기록으로 평가했어요."
+                )
+                HealthConnectSteps.saveReadResult(this@LunchActivityForegroundService, stepReadResult)
+                val correctedSteps = mergeStepCount(sensorSteps, stepReadResult.steps)
+                finishEvaluation(
+                    prefs = prefs,
+                    steps = correctedSteps,
+                    distanceMeters = distanceMeters,
+                    elevationGainMeters = elevationGainMeters,
+                    minimumSteps = minimumSteps,
+                    minimumDistanceMeters = minimumDistanceMeters,
+                    minimumElevationGainMeters = minimumElevationGainMeters,
+                    now = now,
+                    todayKey = todayKey
+                )
+            } catch (error: Exception) {
+                saveDegradedReason("활동 평가에 실패해 센서 기록으로 평가했어요: ${error.message}")
+                finishEvaluation(
+                    prefs = prefs,
+                    steps = sensorSteps,
+                    distanceMeters = distanceMeters,
+                    elevationGainMeters = elevationGainMeters,
+                    minimumSteps = minimumSteps,
+                    minimumDistanceMeters = minimumDistanceMeters,
+                    minimumElevationGainMeters = minimumElevationGainMeters,
+                    now = now,
+                    todayKey = todayKey
                 )
             }
-            HealthConnectSteps.saveReadResult(this@LunchActivityForegroundService, stepReadResult)
-            val correctedSteps = stepReadResult.steps ?: sensorSteps
-            finishEvaluation(
-                prefs = prefs,
-                steps = correctedSteps,
+        }
+    }
+
+    private fun finishAlreadyEvaluated(
+        prefs: android.content.SharedPreferences,
+        steps: Int,
+        distanceMeters: Double,
+        elevationGainMeters: Double,
+        minimumSteps: Int,
+        minimumDistanceMeters: Double,
+        minimumElevationGainMeters: Double,
+        now: Long,
+        todayKey: String
+    ) {
+        val requiresAlert =
+            steps <= minimumSteps ||
+                distanceMeters <= minimumDistanceMeters ||
+                elevationGainMeters <= minimumElevationGainMeters
+        prefs.edit()
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus), "evaluated")
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyEndedAt), Instant.ofEpochMilli(now).toString())
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keySteps, steps) }
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStepBaseline))
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLatestStepCounter))
+            .apply()
+
+        val alertAlreadyAttempted = prefs.getString(
+            BackgroundPrefs.flutterKey(BackgroundPrefs.keyAlertAttemptedDateKey),
+            null
+        ) == todayKey
+        if (requiresAlert && !alertAlreadyAttempted) {
+            val message = buildAlertMessage(
+                steps = steps,
                 distanceMeters = distanceMeters,
+                elevationGainMeters = elevationGainMeters,
                 minimumSteps = minimumSteps,
                 minimumDistanceMeters = minimumDistanceMeters,
-                now = now,
-                todayKey = todayKey
+                minimumElevationGainMeters = minimumElevationGainMeters
             )
+            showDietProjectAlert(message)
+            sendSmsIfPossible(message, todayKey)
         }
+
+        finishService()
     }
 
     private fun finishEvaluation(
         prefs: android.content.SharedPreferences,
         steps: Int,
         distanceMeters: Double,
+        elevationGainMeters: Double,
         minimumSteps: Int,
         minimumDistanceMeters: Double,
+        minimumElevationGainMeters: Double,
         now: Long,
         todayKey: String
     ) {
-        val requiresAlert = steps <= minimumSteps || distanceMeters <= minimumDistanceMeters
+        val requiresAlert =
+            steps <= minimumSteps ||
+                distanceMeters <= minimumDistanceMeters ||
+                elevationGainMeters <= minimumElevationGainMeters
 
         prefs.edit()
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus), "evaluated")
@@ -159,28 +254,40 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyEvaluatedDateKey), todayKey)
             .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keySteps, steps) }
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStepBaseline))
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLatestStepCounter))
             .apply()
 
         if (requiresAlert) {
-            val message = "활동 안전 알림: 평일 11:00-13:00 활동이 점심 시간 최소 활동 목표보다 낮아요. " +
-                "걸음수 $steps/$minimumSteps, 이동거리 ${"%.2f".format(distanceMeters / 1000.0)}km/${"%.1f".format(minimumDistanceMeters / 1000.0)}km입니다. 확인해 주세요."
-            showSafetyAlert(message)
-            sendSmsIfPossible(message)
+            val message = buildAlertMessage(
+                steps = steps,
+                distanceMeters = distanceMeters,
+                elevationGainMeters = elevationGainMeters,
+                minimumSteps = minimumSteps,
+                minimumDistanceMeters = minimumDistanceMeters,
+                minimumElevationGainMeters = minimumElevationGainMeters
+            )
+            showDietProjectAlert(message)
+            sendSmsIfPossible(message, todayKey)
         }
 
-        LunchActivityScheduler.scheduleNextWeekday(this)
-        stopForeground(STOP_FOREGROUND_DETACH)
-        stopSelf()
+        finishService()
     }
 
     override fun onLocationChanged(location: Location) {
-        if (location.accuracy <= 0 || location.accuracy > 65) return
+        if (location.accuracy <= 0 || location.accuracy > maxReliableLocationAccuracyMeters) {
+            advanceStepCheckpoint()
+            return
+        }
 
         val prefs = BackgroundPrefs.prefs(this)
         val lastLatitude = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyLastLatitude, Double.NaN)
         val lastLongitude = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyLastLongitude, Double.NaN)
         val lastAccuracy = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyLastAccuracy, Double.NaN)
+        val latestStepCounter = BackgroundPrefs.getInt(this, BackgroundPrefs.keyLatestStepCounter, -1)
+        val stepBaseline = BackgroundPrefs.getInt(this, BackgroundPrefs.keyStepBaseline, -1)
+        val currentLocationTime = locationTimeMillis(location)
         val editor = prefs.edit()
+        applyElevationSample(location, currentLocationTime, editor)
 
         if (!lastLatitude.isNaN() && !lastLongitude.isNaN() && !lastAccuracy.isNaN()) {
             val last = Location(location.provider).apply {
@@ -188,19 +295,35 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
                 longitude = lastLongitude
                 accuracy = lastAccuracy.toFloat()
             }
+            val lastLocationTime = lastLocationTimeMillis()
             val addedMeters = location.distanceTo(last).toDouble()
-            if (addedMeters >= 5) {
+            val accepted = isWalkingSampleAccepted(
+                distanceMeters = addedMeters,
+                elapsedMillis = currentLocationTime - lastLocationTime
+            )
+            if (accepted) {
                 val current = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyDistanceMeters)
                 BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyDistanceMeters, current + addedMeters)
+                if (latestStepCounter >= 0 && stepBaseline >= 0) {
+                    val currentSteps = BackgroundPrefs.getInt(this, BackgroundPrefs.keySteps)
+                    BackgroundPrefs.putInt(
+                        editor,
+                        BackgroundPrefs.keySteps,
+                        currentSteps + max(0, latestStepCounter - stepBaseline)
+                    )
+                }
             }
         }
 
         BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyLastLatitude, location.latitude)
         BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyLastLongitude, location.longitude)
         BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyLastAccuracy, location.accuracy.toDouble())
+        if (latestStepCounter >= 0) {
+            BackgroundPrefs.putInt(editor, BackgroundPrefs.keyStepBaseline, latestStepCounter)
+        }
         editor.putString(
             BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastTimestamp),
-            Instant.ofEpochMilli(location.time).toString()
+            Instant.ofEpochMilli(currentLocationTime).toString()
         )
         editor.apply()
     }
@@ -215,7 +338,7 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             prefs.edit().also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyStepBaseline, baseline) }.apply()
         }
         prefs.edit()
-            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keySteps, max(0, cumulativeSteps - baseline)) }
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyLatestStepCounter, cumulativeSteps) }
             .apply()
     }
 
@@ -240,7 +363,7 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
         for (provider in providers) {
             if (manager.isProviderEnabled(provider)) {
-                manager.requestLocationUpdates(provider, 30_000L, 10f, this)
+                manager.requestLocationUpdates(provider, 30_000L, 0f, this)
             }
         }
     }
@@ -266,10 +389,163 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         sensorManager?.unregisterListener(this)
     }
 
-    private fun showSafetyAlert(message: String) {
+    private fun isWalkingSampleAccepted(distanceMeters: Double, elapsedMillis: Long): Boolean {
+        val elapsedSeconds = elapsedMillis / 1000.0
+        if (elapsedSeconds <= 0) return false
+        val minimumDistance = max(
+            minimumDistanceMetersPerWindow,
+            minimumWalkingSpeedMetersPerSecond * elapsedSeconds
+        )
+        val maximumDistance = maximumWalkingSpeedMetersPerSecond * elapsedSeconds
+        return distanceMeters > minimumDistance && distanceMeters < maximumDistance
+    }
+
+    private fun mergeStepCount(gatedSensorSteps: Int, healthConnectSteps: Int?): Int {
+        if (healthConnectSteps == null) return gatedSensorSteps
+        if (gatedSensorSteps <= 0) return 0
+        return min(gatedSensorSteps, healthConnectSteps)
+    }
+
+    private fun applyElevationSample(
+        location: Location,
+        currentLocationTime: Long,
+        editor: android.content.SharedPreferences.Editor
+    ) {
+        if (!isReliableAltitude(location)) return
+        val startedAt = startedAtMillis() ?: return
+        val altitude = location.altitude
+        val baselineEnd = startedAt + 30L * 60L * 1000L
+        if (currentLocationTime < baselineEnd) {
+            val sum = BackgroundPrefs.getDouble(
+                this,
+                BackgroundPrefs.keyBaselineAltitudeSumMeters,
+                0.0
+            ) + altitude
+            val count = BackgroundPrefs.getInt(
+                this,
+                BackgroundPrefs.keyBaselineAltitudeSampleCount,
+                0
+            ) + 1
+            val baseline = sum / count
+            BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyBaselineAltitudeSumMeters, sum)
+            BackgroundPrefs.putInt(editor, BackgroundPrefs.keyBaselineAltitudeSampleCount, count)
+            BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyBaselineAltitudeMeters, baseline)
+            return
+        }
+
+        var baseline = BackgroundPrefs.getDouble(
+            this,
+            BackgroundPrefs.keyBaselineAltitudeMeters,
+            Double.NaN
+        )
+        if (baseline.isNaN()) {
+            val count = BackgroundPrefs.getInt(
+                this,
+                BackgroundPrefs.keyBaselineAltitudeSampleCount,
+                0
+            )
+            baseline = if (count > 0) {
+                BackgroundPrefs.getDouble(
+                    this,
+                    BackgroundPrefs.keyBaselineAltitudeSumMeters,
+                    altitude
+                ) / count
+            } else {
+                altitude
+            }
+            BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyBaselineAltitudeMeters, baseline)
+        }
+
+        val currentGain = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyElevationGainMeters)
+        val elevationGain = max(currentGain, max(0.0, altitude - baseline))
+        BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyElevationGainMeters, elevationGain)
+    }
+
+    private fun isReliableAltitude(location: Location): Boolean {
+        if (!location.hasAltitude()) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            location.hasVerticalAccuracy() &&
+            location.verticalAccuracyMeters > 30f
+        ) {
+            return false
+        }
+        return true
+    }
+
+    private fun advanceStepCheckpoint() {
+        val latestStepCounter = BackgroundPrefs.getInt(this, BackgroundPrefs.keyLatestStepCounter, -1)
+        if (latestStepCounter < 0) return
+        BackgroundPrefs.prefs(this)
+            .edit()
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyStepBaseline, latestStepCounter) }
+            .apply()
+    }
+
+    private fun locationTimeMillis(location: Location): Long {
+        return if (location.time > 0) location.time else System.currentTimeMillis()
+    }
+
+    private fun lastLocationTimeMillis(): Long {
+        val value = BackgroundPrefs.prefs(this)
+            .getString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastTimestamp), null)
+            ?: return System.currentTimeMillis()
+        return try {
+            Instant.parse(value).toEpochMilli()
+        } catch (_: Exception) {
+            System.currentTimeMillis()
+        }
+    }
+
+    private fun startedAtMillis(): Long? {
+        val value = BackgroundPrefs.prefs(this)
+            .getString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStartedAt), null)
+            ?: return null
+        return try {
+            Instant.parse(value).toEpochMilli()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun buildAlertMessage(
+        steps: Int,
+        distanceMeters: Double,
+        elevationGainMeters: Double,
+        minimumSteps: Int,
+        minimumDistanceMeters: Double,
+        minimumElevationGainMeters: Double
+    ): String {
+        val contactName = BackgroundPrefs.getString(
+            this,
+            BackgroundPrefs.keyContactName,
+            "보호자"
+        )
+        val template = BackgroundPrefs.getString(
+            this,
+            BackgroundPrefs.keyAlertMessageTemplate,
+            BackgroundPrefs.defaultAlertMessageTemplate
+        )
+        val resolvedTemplate =
+            if (template == BackgroundPrefs.legacyDefaultAlertMessageTemplate) {
+                BackgroundPrefs.defaultAlertMessageTemplate
+            } else {
+                template
+            }
+        return resolvedTemplate
+            .replace("{appName}", BackgroundPrefs.appName)
+            .replace("{steps}", steps.toString())
+            .replace("{minimumSteps}", minimumSteps.toString())
+            .replace("{distanceKm}", "%.2f".format(distanceMeters / 1000.0))
+            .replace("{minimumDistanceKm}", "%.1f".format(minimumDistanceMeters / 1000.0))
+            .replace("{elevationGainMeters}", "%.0f".format(elevationGainMeters))
+            .replace("{minimumElevationGainMeters}", "%.0f".format(minimumElevationGainMeters))
+            .replace("{contactName}", contactName)
+    }
+
+    private fun showDietProjectAlert(message: String) {
         val notification = NotificationCompat.Builder(this, alertChannelId)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("활동 안전 알림")
+            .setContentTitle("다이어트 프로젝트 알림")
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -282,20 +558,83 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             .notify(alertNotificationId, notification)
     }
 
-    private fun sendSmsIfPossible(message: String) {
+    private fun sendSmsIfPossible(message: String, todayKey: String) {
         if (checkSelfPermissionCompat(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            saveDegradedReason("문자 권한이 없어 긴급 문자를 보내지 못했어요.")
+            recordSmsFailure(
+                phone = "",
+                todayKey = todayKey,
+                reason = "문자 권한이 없어 보호자 문자를 보내지 못했어요."
+            )
             return
         }
         val phone = BackgroundPrefs.prefs(this)
             .getString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyContactPhone), null)
             ?.takeIf { it.isNotBlank() }
-            ?: return
-        try {
-            SmsManager.getDefault().sendTextMessage(phone, null, message, null, null)
-        } catch (error: Exception) {
-            saveDegradedReason("문자 전송에 실패했어요: ${error.message}")
+        if (phone == null) {
+            recordSmsFailure(
+                phone = "",
+                todayKey = todayKey,
+                reason = "보호자 전화번호가 없어 문자를 보내지 못했어요."
+            )
+            return
         }
+
+        BackgroundPrefs.prefs(this)
+            .edit()
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyAlertAttemptedDateKey), todayKey)
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastStatus), "requested")
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastPhone), phone)
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastDateKey), todayKey)
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastAttemptedAt), Instant.now().toString())
+            .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastError))
+            .apply()
+
+        try {
+            val smsManager = SmsManager.getDefault()
+            val parts = smsManager.divideMessage(message)
+            val sentIntents = ArrayList<PendingIntent>(parts.size)
+            val requestCodeBase = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
+            for (index in parts.indices) {
+                sentIntents.add(smsSentPendingIntent(phone, todayKey, requestCodeBase + index))
+            }
+            if (parts.size > 1) {
+                smsManager.sendMultipartTextMessage(phone, null, parts, sentIntents, null)
+            } else {
+                smsManager.sendTextMessage(phone, null, message, sentIntents.first(), null)
+            }
+        } catch (error: Exception) {
+            recordSmsFailure(
+                phone = phone,
+                todayKey = todayKey,
+                reason = "문자 전송 요청에 실패했어요: ${error.message}"
+            )
+        }
+    }
+
+    private fun recordSmsFailure(phone: String, todayKey: String, reason: String) {
+        BackgroundPrefs.prefs(this)
+            .edit()
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyAlertAttemptedDateKey), todayKey)
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastStatus), "failed")
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastPhone), phone)
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastDateKey), todayKey)
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastAttemptedAt), Instant.now().toString())
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastError), reason)
+            .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastDegradedReason), reason)
+            .apply()
+    }
+
+    private fun smsSentPendingIntent(phone: String, todayKey: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, SmsSentReceiver::class.java)
+            .setAction(SmsSentReceiver.actionSmsSent)
+            .putExtra(SmsSentReceiver.extraPhone, phone)
+            .putExtra(SmsSentReceiver.extraDateKey, todayKey)
+        return PendingIntent.getBroadcast(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun buildServiceNotification(): Notification {
@@ -305,12 +644,22 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
     private fun buildServiceNotification(contentText: String): Notification {
         return NotificationCompat.Builder(this, serviceChannelId)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("활동 안전이 측정 중이에요")
+            .setContentTitle("다이어트 프로젝트가 측정 중이에요")
             .setContentText(contentText)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(appPendingIntent())
             .build()
+    }
+
+    private fun finishService(scheduleNext: Boolean = true) {
+        if (scheduleNext) {
+            LunchActivityScheduler.scheduleNextWeekday(this)
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(serviceNotificationId)
+        stopSelf()
     }
 
     private fun createChannels() {
@@ -326,7 +675,7 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         notificationManager.createNotificationChannel(
             NotificationChannel(
                 alertChannelId,
-                "활동 안전 알림",
+                "다이어트 프로젝트 알림",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "점심시간 활동이 최소 활동 목표보다 낮을 때 보내는 높은 우선순위 알림입니다."

@@ -6,10 +6,12 @@ class ActivityEvaluation {
     required this.distanceMeters,
     required this.threshold,
     required this.evaluatedAt,
+    this.elevationGainMeters = 0,
   });
 
   final int steps;
   final double distanceMeters;
+  final double elevationGainMeters;
   final ActivityThreshold threshold;
   final DateTime evaluatedAt;
 
@@ -18,7 +20,13 @@ class ActivityEvaluation {
   bool get isDistanceBelowThreshold =>
       distanceMeters <= threshold.minimumDistanceMeters;
 
-  bool get requiresAlert => isStepBelowThreshold || isDistanceBelowThreshold;
+  bool get isElevationGainBelowThreshold =>
+      elevationGainMeters <= threshold.minimumElevationGainMeters;
+
+  bool get requiresAlert =>
+      isStepBelowThreshold ||
+      isDistanceBelowThreshold ||
+      isElevationGainBelowThreshold;
 
   List<String> get alertReasons {
     final reasons = <String>[];
@@ -27,6 +35,9 @@ class ActivityEvaluation {
     }
     if (isDistanceBelowThreshold) {
       reasons.add('distance');
+    }
+    if (isElevationGainBelowThreshold) {
+      reasons.add('elevation');
     }
     return reasons;
   }

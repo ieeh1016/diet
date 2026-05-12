@@ -14,6 +14,7 @@ import '../../domain/repositories/activity_session_store.dart';
 import '../../domain/repositories/alert_repository.dart';
 import '../../domain/repositories/background_monitoring_coordinator.dart';
 import '../../domain/use_cases/calculate_distance.dart';
+import '../../domain/use_cases/classify_walking_sample.dart';
 import '../../domain/use_cases/evaluate_activity.dart';
 import '../../domain/use_cases/next_monitoring_window.dart';
 
@@ -44,6 +45,7 @@ class DeviceBackgroundMonitoringCoordinator
   final _window = const ActivityWindow();
   final _nextMonitoringWindow = const NextMonitoringWindow();
   final _calculateDistance = const CalculateDistance();
+  final _classifyWalkingSample = const ClassifyWalkingSample();
   final _evaluateActivity = const EvaluateActivity();
   final _statusController =
       StreamController<BackgroundMonitoringStatus>.broadcast();
@@ -52,7 +54,11 @@ class DeviceBackgroundMonitoringCoordinator
   StreamSubscription<int>? _stepSubscription;
   StreamSubscription<GpsPoint>? _gpsSubscription;
   int? _stepBaseline;
+  int? _latestCumulativeSteps;
   GpsPoint? _lastReliablePoint;
+  double? _baselineAltitudeMeters;
+  double _baselineAltitudeSum = 0;
+  int _baselineAltitudeSampleCount = 0;
   var _disposed = false;
 
   @override
@@ -91,9 +97,13 @@ class DeviceBackgroundMonitoringCoordinator
     await _cancelSensorSubscriptions();
 
     _stepBaseline = await _sessionStore.loadStepBaseline();
+    _latestCumulativeSteps = _stepBaseline;
     _lastReliablePoint = await _sessionStore.loadLastReliablePoint();
 
     final existing = await _sessionStore.loadSession();
+    _baselineAltitudeMeters = existing.baselineAltitudeMeters;
+    _baselineAltitudeSum = 0;
+    _baselineAltitudeSampleCount = 0;
     final startedAt = existing.startedAt ?? now;
     var session = existing.isActive
         ? existing
@@ -123,7 +133,9 @@ class DeviceBackgroundMonitoringCoordinator
   ) async {
     final now = _clock.now();
     final todayKey = _dateKey(now);
+    final shouldLockToday = _window.isEvaluationTime(now);
     final alreadyEvaluatedToday =
+        shouldLockToday &&
         await _sessionStore.loadEvaluatedDateKey() == todayKey;
     final window = _windowForDate(now);
     final nativeSession = await _platformService.stopAndEvaluate(window);
@@ -134,6 +146,7 @@ class DeviceBackgroundMonitoringCoordinator
     final evaluation = _evaluateActivity(
       steps: mergedSession.steps,
       distanceMeters: mergedSession.distanceMeters,
+      elevationGainMeters: mergedSession.elevationGainMeters,
       threshold: settings.threshold,
       evaluatedAt: now,
     );
@@ -144,10 +157,12 @@ class DeviceBackgroundMonitoringCoordinator
     );
 
     await _sessionStore.saveSession(evaluatedSession);
-    await _sessionStore.saveEvaluatedDateKey(todayKey);
+    if (shouldLockToday) {
+      await _sessionStore.saveEvaluatedDateKey(todayKey);
+    }
     await _sessionStore.clearActiveTracking();
 
-    if (evaluation.requiresAlert && !alreadyEvaluatedToday) {
+    if (shouldLockToday && evaluation.requiresAlert && !alreadyEvaluatedToday) {
       await _alertRepository.deliverEmergencyAlert(
         settings: settings,
         evaluation: evaluation,
@@ -189,36 +204,50 @@ class DeviceBackgroundMonitoringCoordinator
       return;
     }
 
+    _latestCumulativeSteps = cumulativeSteps;
     _stepBaseline ??= cumulativeSteps;
     await _sessionStore.saveStepBaseline(_stepBaseline!);
-    final steps = math.max(0, cumulativeSteps - _stepBaseline!);
-    final updated = session.copyWith(steps: steps);
-    await _sessionStore.saveSession(updated);
-    await _emitCurrentStatus();
   }
 
   Future<void> _handleGpsPoint(GpsPoint point) async {
     final session = await _sessionStore.loadSession();
-    if (!session.isActive || !point.isReliable) {
+    if (!session.isActive) {
+      return;
+    }
+    if (!point.isReliable) {
+      await _advanceStepCheckpoint();
       return;
     }
 
+    var updatedSession = _applyElevationSample(session, point);
     final lastPoint = _lastReliablePoint;
     _lastReliablePoint = point;
     await _sessionStore.saveLastReliablePoint(point);
     if (lastPoint == null) {
+      await _sessionStore.saveSession(updatedSession);
+      await _advanceStepCheckpoint();
+      await _emitCurrentStatus();
       return;
     }
 
     final addedMeters = _calculateDistance.distanceBetween(lastPoint, point);
-    if (addedMeters < 5) {
+    final decision = _classifyWalkingSample(
+      distanceMeters: addedMeters,
+      elapsed: point.timestamp.difference(lastPoint.timestamp),
+    );
+    final pendingSteps = _pendingSteps();
+    await _advanceStepCheckpoint();
+    if (decision != WalkingSampleDecision.accepted) {
+      await _sessionStore.saveSession(updatedSession);
+      await _emitCurrentStatus();
       return;
     }
 
-    final updated = session.copyWith(
-      distanceMeters: session.distanceMeters + addedMeters,
+    updatedSession = updatedSession.copyWith(
+      steps: updatedSession.steps + pendingSteps,
+      distanceMeters: updatedSession.distanceMeters + addedMeters,
     );
-    await _sessionStore.saveSession(updated);
+    await _sessionStore.saveSession(updatedSession);
     await _emitCurrentStatus();
   }
 
@@ -236,6 +265,56 @@ class DeviceBackgroundMonitoringCoordinator
     await _gpsSubscription?.cancel();
     _stepSubscription = null;
     _gpsSubscription = null;
+  }
+
+  int _pendingSteps() {
+    final latest = _latestCumulativeSteps;
+    final baseline = _stepBaseline;
+    if (latest == null || baseline == null) {
+      return 0;
+    }
+    return math.max(0, latest - baseline);
+  }
+
+  ActivitySession _applyElevationSample(
+    ActivitySession session,
+    GpsPoint point,
+  ) {
+    final altitude = point.altitudeMeters;
+    final startedAt = session.startedAt;
+    if (altitude == null || startedAt == null || !point.hasReliableAltitude) {
+      return session;
+    }
+
+    final baselineEndsAt = startedAt.add(const Duration(minutes: 30));
+    if (point.timestamp.isBefore(baselineEndsAt)) {
+      _baselineAltitudeSum += altitude;
+      _baselineAltitudeSampleCount += 1;
+      _baselineAltitudeMeters =
+          _baselineAltitudeSum / _baselineAltitudeSampleCount;
+      return session.copyWith(baselineAltitudeMeters: _baselineAltitudeMeters);
+    }
+
+    final baseline =
+        _baselineAltitudeMeters ?? session.baselineAltitudeMeters ?? altitude;
+    _baselineAltitudeMeters = baseline;
+    final elevationGain = math.max<double>(
+      session.elevationGainMeters,
+      math.max<double>(0, altitude - baseline),
+    );
+    return session.copyWith(
+      baselineAltitudeMeters: baseline,
+      elevationGainMeters: elevationGain,
+    );
+  }
+
+  Future<void> _advanceStepCheckpoint() async {
+    final latest = _latestCumulativeSteps;
+    if (latest == null) {
+      return;
+    }
+    _stepBaseline = latest;
+    await _sessionStore.saveStepBaseline(latest);
   }
 
   Future<void> _emitCurrentStatus() async {
@@ -270,6 +349,12 @@ class DeviceBackgroundMonitoringCoordinator
       endedAt: local.endedAt ?? native.endedAt,
       steps: math.max(local.steps, native.steps),
       distanceMeters: math.max(local.distanceMeters, native.distanceMeters),
+      elevationGainMeters: math.max(
+        local.elevationGainMeters,
+        native.elevationGainMeters,
+      ),
+      baselineAltitudeMeters:
+          native.baselineAltitudeMeters ?? local.baselineAltitudeMeters,
       evaluation: local.evaluation ?? native.evaluation,
     );
   }

@@ -14,6 +14,9 @@ class ActivityMonitorState {
     required this.now,
     required this.isLoading,
     required this.isSaving,
+    required this.isInitialized,
+    required this.isOnboardingVisible,
+    required this.isOnboardingCompleted,
     required this.lastDeliveryResult,
     required this.backgroundStatus,
     required this.healthConnectStepStatus,
@@ -29,6 +32,9 @@ class ActivityMonitorState {
       now: now,
       isLoading: true,
       isSaving: false,
+      isInitialized: false,
+      isOnboardingVisible: false,
+      isOnboardingCompleted: false,
       lastDeliveryResult: const AlertDeliveryResult.none(),
       backgroundStatus: const BackgroundMonitoringStatus.initial(),
       healthConnectStepStatus: const HealthConnectStepStatus.unavailable(),
@@ -41,6 +47,9 @@ class ActivityMonitorState {
   final DateTime now;
   final bool isLoading;
   final bool isSaving;
+  final bool isInitialized;
+  final bool isOnboardingVisible;
+  final bool isOnboardingCompleted;
   final AlertDeliveryResult lastDeliveryResult;
   final BackgroundMonitoringStatus backgroundStatus;
   final HealthConnectStepStatus healthConnectStepStatus;
@@ -56,6 +65,9 @@ class ActivityMonitorState {
     DateTime? now,
     bool? isLoading,
     bool? isSaving,
+    bool? isInitialized,
+    bool? isOnboardingVisible,
+    bool? isOnboardingCompleted,
     AlertDeliveryResult? lastDeliveryResult,
     BackgroundMonitoringStatus? backgroundStatus,
     HealthConnectStepStatus? healthConnectStepStatus,
@@ -70,6 +82,10 @@ class ActivityMonitorState {
       now: now ?? this.now,
       isLoading: isLoading ?? this.isLoading,
       isSaving: isSaving ?? this.isSaving,
+      isInitialized: isInitialized ?? this.isInitialized,
+      isOnboardingVisible: isOnboardingVisible ?? this.isOnboardingVisible,
+      isOnboardingCompleted:
+          isOnboardingCompleted ?? this.isOnboardingCompleted,
       lastDeliveryResult: lastDeliveryResult ?? this.lastDeliveryResult,
       backgroundStatus: backgroundStatus ?? this.backgroundStatus,
       healthConnectStepStatus:

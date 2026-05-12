@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>활동 안전</string>
+	<string>다이어트 프로젝트</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>활동안전</string>
+	<string>다이어트프로젝트</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,11 +25,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>활동 안전은 평일 11:00부터 13:00까지 점심시간 이동거리를 계산하기 위해 위치를 사용합니다.</string>
+	<string>다이어트 프로젝트는 평일 11:00부터 13:00까지 점심시간 이동거리를 계산하기 위해 위치를 사용합니다.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>활동 안전은 앱이 화면에 없을 때도 점심시간 이동 확인을 이어갈 수 있습니다.</string>
+	<string>다이어트 프로젝트는 앱이 화면에 없을 때도 점심시간 이동 확인을 이어갈 수 있습니다.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>백그라운드 측정이 켜져 있을 때 평일 11:00부터 13:00까지의 안전 확인 시간에만 상시 위치를 사용합니다.</string>
+	<string>백그라운드 측정이 켜져 있을 때 평일 11:00부터 13:00까지의 점심 활동 확인 시간에만 상시 위치를 사용합니다.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>점심시간 활동이 최소 활동 목표보다 낮은지 판단하기 위해 걸음수 활동 데이터를 사용합니다.</string>
 	<key>NSUserNotificationUsageDescription</key>

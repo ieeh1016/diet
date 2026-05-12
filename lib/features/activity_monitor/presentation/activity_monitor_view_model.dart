@@ -36,6 +36,9 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
       final settings = await ref
           .read(settingsRepositoryProvider)
           .loadSettings();
+      final onboardingCompleted = await ref
+          .read(onboardingRepositoryProvider)
+          .isCompleted();
       final permissions = await ref
           .read(permissionRepositoryProvider)
           .readPermissionSnapshot();
@@ -54,6 +57,9 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
           backgroundStatus: backgroundStatus,
           healthConnectStepStatus: healthConnectStepStatus,
           isLoading: false,
+          isInitialized: true,
+          isOnboardingVisible: !onboardingCompleted,
+          isOnboardingCompleted: onboardingCompleted,
           statusMessage: backgroundStatus.isScheduled
               ? '평일 백그라운드 측정이 예약됐어요'
               : '앱 실행 중 측정을 준비했어요',
@@ -65,7 +71,42 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
       _setState(
         state.copyWith(
           isLoading: false,
+          isInitialized: true,
           errorMessage: '활동 모니터를 불러오지 못했어요: $error',
+        ),
+      );
+    }
+  }
+
+  void showOnboarding() {
+    _setState(state.copyWith(isOnboardingVisible: true, clearError: true));
+  }
+
+  void closeOnboarding() {
+    if (!state.isOnboardingCompleted) {
+      return;
+    }
+    _setState(state.copyWith(isOnboardingVisible: false, clearError: true));
+  }
+
+  Future<void> completeOnboarding() async {
+    _setState(state.copyWith(isSaving: true, clearError: true));
+    try {
+      await ref.read(onboardingRepositoryProvider).markCompleted();
+      _setState(
+        state.copyWith(
+          isSaving: false,
+          isOnboardingVisible: false,
+          isOnboardingCompleted: true,
+          statusMessage: '첫 설정을 완료했어요',
+          clearError: true,
+        ),
+      );
+    } on Object catch (error) {
+      _setState(
+        state.copyWith(
+          isSaving: false,
+          errorMessage: '튜토리얼 완료 상태를 저장하지 못했어요: $error',
         ),
       );
     }
@@ -192,13 +233,18 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
           .read(backgroundMonitoringCoordinatorProvider)
           .stopAndEvaluate(state.settings);
       final evaluation = session.evaluation;
+      final shouldFinalize = _window.isEvaluationTime(
+        ref.read(clockProvider).now(),
+      );
       _setState(
         state.copyWith(
           now: ref.read(clockProvider).now(),
           session: session,
           isLoading: false,
-          statusMessage: evaluation?.requiresAlert ?? false
+          statusMessage: (evaluation?.requiresAlert ?? false) && shouldFinalize
               ? '점심 시간 최소 활동 목표보다 낮아 보호자 연락을 준비했어요'
+              : evaluation?.requiresAlert ?? false
+              ? '현재 기록은 최소 활동 목표보다 낮지만 13시에 최종 판단해요'
               : '점심 시간 최소 활동 목표를 충족했어요',
           clearError: true,
         ),
@@ -247,10 +293,10 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
           isLoading: false,
           lastDeliveryResult: result,
           statusMessage: result.smsSent
-              ? '보호자 테스트 문자를 보냈어요'
+              ? '보호자 미리보기 문자를 보냈어요'
               : result.smsFallbackOpened
               ? '문자 앱을 열었어요. 내용을 확인한 뒤 전송해 주세요'
-              : result.errorMessage ?? '테스트 문자 전송을 완료하지 못했어요',
+              : result.errorMessage ?? '미리보기 문자 전송을 완료하지 못했어요',
           errorMessage: result.errorMessage,
           clearError: result.errorMessage == null,
         ),
@@ -259,7 +305,7 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
       _setState(
         state.copyWith(
           isLoading: false,
-          errorMessage: '테스트 문자 전송에 실패했어요: $error',
+          errorMessage: '미리보기 문자 전송에 실패했어요: $error',
         ),
       );
     }

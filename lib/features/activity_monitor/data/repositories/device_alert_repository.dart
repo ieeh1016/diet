@@ -40,7 +40,7 @@ class DeviceAlertRepository implements AlertRepository {
 
     try {
       await _notificationService.showActivityAlert(
-        title: '활동 안전 알림',
+        title: '다이어트 프로젝트 알림',
         body: message,
       );
       notificationShown = true;
@@ -91,12 +91,24 @@ class DeviceAlertRepository implements AlertRepository {
     try {
       final result = await _smsService.sendEmergencySms(
         phoneNumber: settings.emergencyContact.phoneNumber,
-        message: '[활동 안전] 보호자 연락처 테스트입니다. 긴급 상황 알림을 받을 번호로 설정되어 있어요.',
+        message: _buildAlertMessage(
+          settings: settings,
+          evaluation: ActivityEvaluation(
+            steps: settings.threshold.minimumSteps > 500
+                ? settings.threshold.minimumSteps - 500
+                : 0,
+            distanceMeters: settings.threshold.minimumDistanceMeters * 0.7,
+            elevationGainMeters:
+                settings.threshold.minimumElevationGainMeters * 0.7,
+            threshold: settings.threshold,
+            evaluatedAt: DateTime.now(),
+          ),
+        ),
       );
       smsSent = result.sent;
       smsFallbackOpened = result.fallbackOpened;
     } on Object catch (error) {
-      errorMessage = '테스트 문자 전송에 실패했어요: $error';
+      errorMessage = '미리보기 문자 전송에 실패했어요: $error';
     }
 
     return AlertDeliveryResult(

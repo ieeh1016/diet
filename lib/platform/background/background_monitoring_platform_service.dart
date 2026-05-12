@@ -118,6 +118,10 @@ class BackgroundMonitoringPlatformService {
       endedAt: _dateFromMillis(map['endedAtMillis']),
       steps: _intFrom(map['steps']),
       distanceMeters: _doubleFrom(map['distanceMeters']),
+      elevationGainMeters: _doubleFrom(map['elevationGainMeters']),
+      baselineAltitudeMeters: _nullableDoubleFrom(
+        map['baselineAltitudeMeters'],
+      ),
       evaluation: null,
     );
   }
@@ -140,12 +144,16 @@ class BackgroundMonitoringPlatformService {
   }
 
   double _doubleFrom(Object? value) {
+    return _nullableDoubleFrom(value) ?? 0;
+  }
+
+  double? _nullableDoubleFrom(Object? value) {
     if (value is double) {
       return value;
     }
     if (value is num) {
       return value.toDouble();
     }
-    return 0;
+    return null;
   }
 }

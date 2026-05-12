@@ -8,12 +8,15 @@ import 'package:diet/features/activity_monitor/domain/entities/activity_session.
 import 'package:diet/features/activity_monitor/domain/entities/alert_delivery_result.dart';
 import 'package:diet/features/activity_monitor/domain/entities/background_monitoring_status.dart';
 import 'package:diet/features/activity_monitor/domain/entities/gps_point.dart';
+import 'package:diet/features/activity_monitor/domain/entities/health_connect_step_status.dart';
 import 'package:diet/features/activity_monitor/domain/repositories/activity_sensor_repository.dart';
 import 'package:diet/features/activity_monitor/domain/repositories/activity_session_store.dart';
 import 'package:diet/features/activity_monitor/domain/repositories/alert_repository.dart';
 import 'package:diet/features/activity_monitor/domain/repositories/background_monitoring_coordinator.dart';
+import 'package:diet/features/activity_monitor/domain/repositories/onboarding_repository.dart';
 import 'package:diet/features/activity_monitor/domain/repositories/permission_repository.dart';
 import 'package:diet/features/activity_monitor/domain/repositories/settings_repository.dart';
+import 'package:diet/platform/health/health_connect_platform_service.dart';
 
 class FakeClock implements Clock {
   FakeClock(this.value);
@@ -51,6 +54,29 @@ class FakeSensorRepository implements ActivitySensorRepository {
   Future<void> dispose() async {
     await stepController.close();
     await gpsController.close();
+  }
+}
+
+class FakeOnboardingRepository implements OnboardingRepository {
+  FakeOnboardingRepository({this.completed = false});
+
+  bool completed;
+  var markCompletedCount = 0;
+  var resetCount = 0;
+
+  @override
+  Future<bool> isCompleted() async => completed;
+
+  @override
+  Future<void> markCompleted() async {
+    completed = true;
+    markCompletedCount += 1;
+  }
+
+  @override
+  Future<void> reset() async {
+    completed = false;
+    resetCount += 1;
   }
 }
 
@@ -194,6 +220,35 @@ class FakePermissionRepository implements PermissionRepository {
 
   @override
   Future<PermissionSnapshot> requestRequiredPermissions() async => snapshot;
+}
+
+class FakeHealthConnectPlatformService extends HealthConnectPlatformService {
+  FakeHealthConnectPlatformService([
+    this.status = const HealthConnectStepStatus(
+      available: true,
+      readPermissionGranted: true,
+      lastReadSuccessful: true,
+    ),
+  ]);
+
+  HealthConnectStepStatus status;
+  var requestCount = 0;
+  var openSettingsCount = 0;
+
+  @override
+  Future<HealthConnectStepStatus> currentStatus() async => status;
+
+  @override
+  Future<HealthConnectStepStatus> requestReadStepsPermission() async {
+    requestCount += 1;
+    return status;
+  }
+
+  @override
+  Future<bool> openSettings() async {
+    openSettingsCount += 1;
+    return true;
+  }
 }
 
 class FakeAlertRepository implements AlertRepository {

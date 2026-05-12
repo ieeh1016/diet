@@ -10,11 +10,16 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
   static const _endedAtKey = 'background.session.ended_at';
   static const _stepsKey = 'background.session.steps';
   static const _distanceMetersKey = 'background.session.distance_meters';
+  static const _elevationGainMetersKey =
+      'background.session.elevation_gain_meters';
+  static const _baselineAltitudeMetersKey =
+      'background.session.baseline_altitude_meters';
   static const _lastLatitudeKey = 'background.session.last_latitude';
   static const _lastLongitudeKey = 'background.session.last_longitude';
   static const _lastAccuracyKey = 'background.session.last_accuracy';
   static const _lastTimestampKey = 'background.session.last_timestamp';
   static const _stepBaselineKey = 'background.session.step_baseline';
+  static const _latestStepCounterKey = 'background.session.latest_step_counter';
   static const _evaluatedDateKey = 'background.session.evaluated_date_key';
 
   @override
@@ -35,6 +40,8 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
       endedAt: _parseDate(preferences.getString(_endedAtKey)),
       steps: preferences.getInt(_stepsKey) ?? 0,
       distanceMeters: preferences.getDouble(_distanceMetersKey) ?? 0,
+      elevationGainMeters: preferences.getDouble(_elevationGainMetersKey) ?? 0,
+      baselineAltitudeMeters: preferences.getDouble(_baselineAltitudeMetersKey),
       evaluation: null,
     );
   }
@@ -45,6 +52,10 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
     await preferences.setString(_statusKey, session.status.name);
     await preferences.setInt(_stepsKey, session.steps);
     await preferences.setDouble(_distanceMetersKey, session.distanceMeters);
+    await preferences.setDouble(
+      _elevationGainMetersKey,
+      session.elevationGainMeters,
+    );
 
     if (session.startedAt case final startedAt?) {
       await preferences.setString(_startedAtKey, startedAt.toIso8601String());
@@ -56,6 +67,12 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
       await preferences.setString(_endedAtKey, endedAt.toIso8601String());
     } else {
       await preferences.remove(_endedAtKey);
+    }
+
+    if (session.baselineAltitudeMeters case final baselineAltitude?) {
+      await preferences.setDouble(_baselineAltitudeMetersKey, baselineAltitude);
+    } else {
+      await preferences.remove(_baselineAltitudeMetersKey);
     }
   }
 
@@ -126,6 +143,7 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
     await preferences.remove(_lastAccuracyKey);
     await preferences.remove(_lastTimestampKey);
     await preferences.remove(_stepBaselineKey);
+    await preferences.remove(_latestStepCounterKey);
   }
 
   DateTime? _parseDate(String? value) =>

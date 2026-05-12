@@ -59,8 +59,8 @@ class ActivityNotificationService {
       body: body,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          'activity_safety_alerts',
-          '활동 안전 알림',
+          'diet_project_alerts',
+          '다이어트 프로젝트 알림',
           channelDescription: '점심시간 활동이 최소 활동 목표보다 낮을 때 보내는 높은 우선순위 알림입니다.',
           importance: Importance.max,
           priority: Priority.max,
@@ -81,7 +81,7 @@ class ActivityNotificationService {
           interruptionLevel: InterruptionLevel.active,
         ),
       ),
-      payload: 'activity_safety_alert',
+      payload: 'diet_project_alert',
     );
   }
 }

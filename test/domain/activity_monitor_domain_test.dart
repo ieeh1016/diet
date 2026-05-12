@@ -6,6 +6,7 @@ import 'package:diet/features/activity_monitor/domain/entities/activity_threshol
 import 'package:diet/features/activity_monitor/domain/entities/gps_point.dart';
 import 'package:diet/features/activity_monitor/domain/use_cases/build_alert_message.dart';
 import 'package:diet/features/activity_monitor/domain/use_cases/calculate_distance.dart';
+import 'package:diet/features/activity_monitor/domain/use_cases/classify_walking_sample.dart';
 import 'package:diet/features/activity_monitor/domain/use_cases/evaluate_activity.dart';
 import 'package:diet/features/activity_monitor/domain/use_cases/next_monitoring_window.dart';
 
@@ -49,11 +50,33 @@ void main() {
     expect(distance, lessThan(190));
   });
 
+  test(
+    'walking sample classifier rejects stationary and too-fast intervals',
+    () {
+      const classifier = ClassifyWalkingSample();
+      const elapsed = Duration(seconds: 30);
+
+      expect(
+        classifier(distanceMeters: 10, elapsed: elapsed),
+        WalkingSampleDecision.tooLittleMovement,
+      );
+      expect(
+        classifier(distanceMeters: 42, elapsed: elapsed),
+        WalkingSampleDecision.accepted,
+      );
+      expect(
+        classifier(distanceMeters: 90, elapsed: elapsed),
+        WalkingSampleDecision.tooFastForWalking,
+      );
+    },
+  );
+
   test('evaluation requires alert when steps or distance are at threshold', () {
     const evaluate = EvaluateActivity();
     final evaluation = evaluate(
       steps: 2000,
       distanceMeters: 1500,
+      elevationGainMeters: 80,
       threshold: const ActivityThreshold(
         minimumSteps: 2000,
         minimumDistanceMeters: 1000,
@@ -71,6 +94,7 @@ void main() {
     final evaluation = const EvaluateActivity()(
       steps: 1200,
       distanceMeters: 350,
+      elevationGainMeters: 20,
       threshold: ActivityThreshold.defaults,
       evaluatedAt: DateTime(2026, 5, 11, 13),
     );
@@ -82,6 +106,27 @@ void main() {
 
     expect(message, contains('1200/2000'));
     expect(message, contains('0.35km/1.0km'));
+  });
+
+  test('alert message applies custom template placeholders', () {
+    const buildMessage = BuildAlertMessage();
+    final evaluation = const EvaluateActivity()(
+      steps: 900,
+      distanceMeters: 420,
+      elevationGainMeters: 15,
+      threshold: ActivityThreshold.defaults,
+      evaluatedAt: DateTime(2026, 5, 11, 13),
+    );
+
+    final message = buildMessage(
+      settings: ActivityMonitorSettings.defaults.copyWith(
+        alertMessageTemplate:
+            '[{appName}] {contactName} 확인 필요: {steps}/{minimumSteps}, {distanceKm}/{minimumDistanceKm}',
+      ),
+      evaluation: evaluation,
+    );
+
+    expect(message, '[다이어트 프로젝트] 보호자 확인 필요: 900/2000, 0.42/1.0');
   });
 
   test('next monitoring window skips weekends and passed windows', () {
