@@ -18,5 +18,9 @@ abstract interface class ActivitySessionStore {
 
   Future<void> saveEvaluatedDateKey(String dateKey);
 
+  Future<String?> loadAlertAttemptedDateKey();
+
+  Future<void> saveAlertAttemptedDateKey(String dateKey);
+
   Future<void> clearActiveTracking();
 }

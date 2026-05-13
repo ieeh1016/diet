@@ -7,8 +7,8 @@ object BackgroundPrefs {
     private const val doublePrefix = "VGhpcyBpcyB0aGUgcHJlZml4IGZvciBEb3VibGUu"
     const val appName = "다이어트 프로젝트"
     const val defaultAlertMessageTemplate =
-        "{appName} 알림: 평일 11:00-13:00 점심 활동이 최소 활동 목표보다 낮아요. " +
-            "걸음수 {steps}/{minimumSteps}, 이동거리 {distanceKm}km/{minimumDistanceKm}km, " +
+        "{appName} 알림: 평일 11:00-13:00 점심 활동이 설정한 기준 이하예요. " +
+            "판정 기준: {goalPolicy}. 걸음수 {steps}/{minimumSteps}, 이동거리 {distanceKm}km/{minimumDistanceKm}km, " +
             "획득고도 {elevationGainMeters}m/{minimumElevationGainMeters}m입니다. 확인해 주세요."
     const val legacyDefaultAlertMessageTemplate =
         "{appName} 알림: 평일 11:00-13:00 점심 활동이 최소 활동 목표보다 낮아요. " +
@@ -21,6 +21,11 @@ object BackgroundPrefs {
     const val keyDistanceMeters = "background.session.distance_meters"
     const val keyElevationGainMeters = "background.session.elevation_gain_meters"
     const val keyBaselineAltitudeMeters = "background.session.baseline_altitude_meters"
+    const val keyAcceptedGpsSegmentCount = "background.session.accepted_gps_segment_count"
+    const val keyRejectedStationarySegmentCount = "background.session.rejected_stationary_segment_count"
+    const val keyRejectedFastSegmentCount = "background.session.rejected_fast_segment_count"
+    const val keyRejectedPoorAccuracySampleCount = "background.session.rejected_poor_accuracy_sample_count"
+    const val keyIgnoredStepCount = "background.session.ignored_step_count"
     const val keyBaselineAltitudeSumMeters = "background.session.baseline_altitude_sum_meters"
     const val keyBaselineAltitudeSampleCount = "background.session.baseline_altitude_sample_count"
     const val keyLastLatitude = "background.session.last_latitude"
@@ -47,6 +52,8 @@ object BackgroundPrefs {
     const val keyMinimumSteps = "activity.minimum_steps"
     const val keyMinimumDistanceMeters = "activity.minimum_distance_meters"
     const val keyMinimumElevationGainMeters = "activity.minimum_elevation_gain_meters"
+    const val keyGoalPolicyMetrics = "activity.goal_policy.metrics"
+    const val keyGoalPolicyMatchMode = "activity.goal_policy.match_mode"
     const val keyContactName = "activity.contact_name"
     const val keyContactPhone = "activity.contact_phone"
     const val keyAlertMessageTemplate = "activity.alert_message_template"

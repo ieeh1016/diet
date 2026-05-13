@@ -80,12 +80,29 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
 
         val now = System.currentTimeMillis()
         val prefs = BackgroundPrefs.prefs(this)
+        val currentStatus = prefs.getString(
+            BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus),
+            "idle"
+        )
+        val existingStartedAt = startedAtMillis()
+        if (currentStatus == "active" && existingStartedAt != null &&
+            dateKey(existingStartedAt) == dateKey(now)
+        ) {
+            startStepCounter()
+            startLocationUpdates()
+            return
+        }
         prefs.edit()
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus), "active")
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStartedAt), Instant.ofEpochMilli(now).toString())
             .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keySteps, 0) }
             .also { BackgroundPrefs.putDouble(it, BackgroundPrefs.keyDistanceMeters, 0.0) }
             .also { BackgroundPrefs.putDouble(it, BackgroundPrefs.keyElevationGainMeters, 0.0) }
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyAcceptedGpsSegmentCount, 0) }
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyRejectedStationarySegmentCount, 0) }
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyRejectedFastSegmentCount, 0) }
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyRejectedPoorAccuracySampleCount, 0) }
+            .also { BackgroundPrefs.putInt(it, BackgroundPrefs.keyIgnoredStepCount, 0) }
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastLatitude))
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastLongitude))
             .remove(BackgroundPrefs.flutterKey(BackgroundPrefs.keyLastAccuracy))
@@ -121,6 +138,16 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             BackgroundPrefs.keyMinimumElevationGainMeters,
             50.0
         )
+        val goalPolicyMetrics = BackgroundPrefs.getString(
+            this,
+            BackgroundPrefs.keyGoalPolicyMetrics,
+            defaultGoalPolicyMetrics
+        )
+        val goalPolicyMatchMode = BackgroundPrefs.getString(
+            this,
+            BackgroundPrefs.keyGoalPolicyMatchMode,
+            "all"
+        )
         val now = System.currentTimeMillis()
         val todayKey = dateKey(now)
         val alreadyEvaluatedToday = prefs.getString(
@@ -137,6 +164,8 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
                 minimumSteps = minimumSteps,
                 minimumDistanceMeters = minimumDistanceMeters,
                 minimumElevationGainMeters = minimumElevationGainMeters,
+                goalPolicyMetrics = goalPolicyMetrics,
+                goalPolicyMatchMode = goalPolicyMatchMode,
                 now = now,
                 todayKey = todayKey
             )
@@ -169,6 +198,8 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
                     minimumSteps = minimumSteps,
                     minimumDistanceMeters = minimumDistanceMeters,
                     minimumElevationGainMeters = minimumElevationGainMeters,
+                    goalPolicyMetrics = goalPolicyMetrics,
+                    goalPolicyMatchMode = goalPolicyMatchMode,
                     now = now,
                     todayKey = todayKey
                 )
@@ -182,6 +213,8 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
                     minimumSteps = minimumSteps,
                     minimumDistanceMeters = minimumDistanceMeters,
                     minimumElevationGainMeters = minimumElevationGainMeters,
+                    goalPolicyMetrics = goalPolicyMetrics,
+                    goalPolicyMatchMode = goalPolicyMatchMode,
                     now = now,
                     todayKey = todayKey
                 )
@@ -197,13 +230,21 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         minimumSteps: Int,
         minimumDistanceMeters: Double,
         minimumElevationGainMeters: Double,
+        goalPolicyMetrics: String,
+        goalPolicyMatchMode: String,
         now: Long,
         todayKey: String
     ) {
-        val requiresAlert =
-            steps <= minimumSteps ||
-                distanceMeters <= minimumDistanceMeters ||
-                elevationGainMeters <= minimumElevationGainMeters
+        val requiresAlert = requiresAlert(
+            steps = steps,
+            distanceMeters = distanceMeters,
+            elevationGainMeters = elevationGainMeters,
+            minimumSteps = minimumSteps,
+            minimumDistanceMeters = minimumDistanceMeters,
+            minimumElevationGainMeters = minimumElevationGainMeters,
+            goalPolicyMetrics = goalPolicyMetrics,
+            goalPolicyMatchMode = goalPolicyMatchMode
+        )
         prefs.edit()
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus), "evaluated")
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyEndedAt), Instant.ofEpochMilli(now).toString())
@@ -240,13 +281,21 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         minimumSteps: Int,
         minimumDistanceMeters: Double,
         minimumElevationGainMeters: Double,
+        goalPolicyMetrics: String,
+        goalPolicyMatchMode: String,
         now: Long,
         todayKey: String
     ) {
-        val requiresAlert =
-            steps <= minimumSteps ||
-                distanceMeters <= minimumDistanceMeters ||
-                elevationGainMeters <= minimumElevationGainMeters
+        val requiresAlert = requiresAlert(
+            steps = steps,
+            distanceMeters = distanceMeters,
+            elevationGainMeters = elevationGainMeters,
+            minimumSteps = minimumSteps,
+            minimumDistanceMeters = minimumDistanceMeters,
+            minimumElevationGainMeters = minimumElevationGainMeters,
+            goalPolicyMetrics = goalPolicyMetrics,
+            goalPolicyMatchMode = goalPolicyMatchMode
+        )
 
         prefs.edit()
             .putString(BackgroundPrefs.flutterKey(BackgroundPrefs.keyStatus), "evaluated")
@@ -273,8 +322,41 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         finishService()
     }
 
+    private fun requiresAlert(
+        steps: Int,
+        distanceMeters: Double,
+        elevationGainMeters: Double,
+        minimumSteps: Int,
+        minimumDistanceMeters: Double,
+        minimumElevationGainMeters: Double,
+        goalPolicyMetrics: String,
+        goalPolicyMatchMode: String
+    ): Boolean {
+        val metrics = normalizedGoalPolicyMetrics(
+            rawMetrics = goalPolicyMetrics,
+            goalPolicyMatchMode = goalPolicyMatchMode,
+            minimumElevationGainMeters = minimumElevationGainMeters
+        )
+        val belowStates = metrics.map { metric ->
+            when (metric) {
+                "steps" -> steps <= minimumSteps
+                "distance" -> distanceMeters <= minimumDistanceMeters
+                "elevation" -> elevationGainMeters <= minimumElevationGainMeters
+                else -> false
+            }
+        }.ifEmpty { listOf(true) }
+
+        return if (goalPolicyMatchMode == "any") {
+            belowStates.all { it }
+        } else {
+            belowStates.any { it }
+        }
+    }
+
     override fun onLocationChanged(location: Location) {
         if (location.accuracy <= 0 || location.accuracy > maxReliableLocationAccuracyMeters) {
+            incrementInt(BackgroundPrefs.keyRejectedPoorAccuracySampleCount)
+            incrementInt(BackgroundPrefs.keyIgnoredStepCount, pendingStepDelta())
             advanceStepCheckpoint()
             return
         }
@@ -302,6 +384,7 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
                 elapsedMillis = currentLocationTime - lastLocationTime
             )
             if (accepted) {
+                incrementInt(editor, BackgroundPrefs.keyAcceptedGpsSegmentCount)
                 val current = BackgroundPrefs.getDouble(this, BackgroundPrefs.keyDistanceMeters)
                 BackgroundPrefs.putDouble(editor, BackgroundPrefs.keyDistanceMeters, current + addedMeters)
                 if (latestStepCounter >= 0 && stepBaseline >= 0) {
@@ -310,6 +393,24 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
                         editor,
                         BackgroundPrefs.keySteps,
                         currentSteps + max(0, latestStepCounter - stepBaseline)
+                    )
+                }
+            } else {
+                val rejectedKey = if (isTooFastForWalking(
+                        distanceMeters = addedMeters,
+                        elapsedMillis = currentLocationTime - lastLocationTime
+                    )
+                ) {
+                    BackgroundPrefs.keyRejectedFastSegmentCount
+                } else {
+                    BackgroundPrefs.keyRejectedStationarySegmentCount
+                }
+                incrementInt(editor, rejectedKey)
+                if (latestStepCounter >= 0 && stepBaseline >= 0) {
+                    incrementInt(
+                        editor,
+                        BackgroundPrefs.keyIgnoredStepCount,
+                        max(0, latestStepCounter - stepBaseline)
                     )
                 }
             }
@@ -398,6 +499,37 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         )
         val maximumDistance = maximumWalkingSpeedMetersPerSecond * elapsedSeconds
         return distanceMeters > minimumDistance && distanceMeters < maximumDistance
+    }
+
+    private fun isTooFastForWalking(distanceMeters: Double, elapsedMillis: Long): Boolean {
+        val elapsedSeconds = elapsedMillis / 1000.0
+        if (elapsedSeconds <= 0) return false
+        return distanceMeters >= maximumWalkingSpeedMetersPerSecond * elapsedSeconds
+    }
+
+    private fun pendingStepDelta(): Int {
+        val latestStepCounter = BackgroundPrefs.getInt(this, BackgroundPrefs.keyLatestStepCounter, -1)
+        val stepBaseline = BackgroundPrefs.getInt(this, BackgroundPrefs.keyStepBaseline, -1)
+        if (latestStepCounter < 0 || stepBaseline < 0) return 0
+        return max(0, latestStepCounter - stepBaseline)
+    }
+
+    private fun incrementInt(key: String, delta: Int = 1) {
+        if (delta <= 0) return
+        BackgroundPrefs.prefs(this)
+            .edit()
+            .also { incrementInt(it, key, delta) }
+            .apply()
+    }
+
+    private fun incrementInt(
+        editor: android.content.SharedPreferences.Editor,
+        key: String,
+        delta: Int = 1
+    ) {
+        if (delta <= 0) return
+        val current = BackgroundPrefs.getInt(this, key)
+        BackgroundPrefs.putInt(editor, key, current + delta)
     }
 
     private fun mergeStepCount(gatedSensorSteps: Int, healthConnectSteps: Int?): Int {
@@ -531,6 +663,7 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             } else {
                 template
             }
+        val goalPolicyDescription = goalPolicyDescription()
         return resolvedTemplate
             .replace("{appName}", BackgroundPrefs.appName)
             .replace("{steps}", steps.toString())
@@ -539,7 +672,61 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
             .replace("{minimumDistanceKm}", "%.1f".format(minimumDistanceMeters / 1000.0))
             .replace("{elevationGainMeters}", "%.0f".format(elevationGainMeters))
             .replace("{minimumElevationGainMeters}", "%.0f".format(minimumElevationGainMeters))
+            .replace("{goalPolicy}", goalPolicyDescription)
             .replace("{contactName}", contactName)
+    }
+
+    private fun goalPolicyDescription(): String {
+        val rawMetrics = BackgroundPrefs.getString(
+            this,
+            BackgroundPrefs.keyGoalPolicyMetrics,
+            defaultGoalPolicyMetrics
+        )
+        val mode = BackgroundPrefs.getString(
+            this,
+            BackgroundPrefs.keyGoalPolicyMatchMode,
+            "all"
+        )
+        val metrics = normalizedGoalPolicyMetrics(
+            rawMetrics = rawMetrics,
+            goalPolicyMatchMode = mode,
+            minimumElevationGainMeters = 50.0
+        )
+        val labels = listOf("steps", "distance", "elevation")
+            .filter { metrics.contains(it) }
+            .map {
+                when (it) {
+                    "steps" -> "걸음수"
+                    "distance" -> "이동거리"
+                    else -> "획득고도"
+                }
+            }
+            .joinToString(", ")
+        return if (mode == "any") {
+            "$labels 중 하나 이상 기준값 초과이면 성공"
+        } else {
+            "$labels 모두 기준값 초과이면 성공"
+        }
+    }
+
+    private fun normalizedGoalPolicyMetrics(
+        rawMetrics: String,
+        goalPolicyMatchMode: String,
+        minimumElevationGainMeters: Double
+    ): List<String> {
+        val metrics = rawMetrics
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .ifEmpty { defaultGoalPolicyMetricList }
+        return if (goalPolicyMatchMode == "all" &&
+            metrics == listOf("steps", "distance", "elevation") &&
+            minimumElevationGainMeters == 50.0
+        ) {
+            defaultGoalPolicyMetricList
+        } else {
+            metrics
+        }
     }
 
     private fun showDietProjectAlert(message: String) {
@@ -724,5 +911,10 @@ class LunchActivityForegroundService : Service(), LocationListener, SensorEventL
         val start = calendar.timeInMillis
         calendar.set(Calendar.HOUR_OF_DAY, 13)
         return start to calendar.timeInMillis
+    }
+
+    companion object {
+        private const val defaultGoalPolicyMetrics = "steps,distance"
+        private val defaultGoalPolicyMetricList = listOf("steps", "distance")
     }
 }

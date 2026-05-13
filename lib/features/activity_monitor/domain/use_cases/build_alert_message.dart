@@ -29,6 +29,7 @@ class BuildAlertMessage {
       'minimumDistanceKm': thresholdKm,
       'elevationGainMeters': elevationGainMeters,
       'minimumElevationGainMeters': minimumElevationGainMeters,
+      'goalPolicy': settings.goalPolicy.description,
       'contactName': contactName.isEmpty ? '보호자' : contactName,
     };
 

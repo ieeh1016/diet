@@ -6,11 +6,13 @@ import '../../../../core/time/activity_window.dart';
 import '../domain/entities/activity_monitor_settings.dart';
 import '../domain/entities/activity_session.dart';
 import '../domain/entities/background_monitoring_status.dart';
+import '../domain/use_cases/evaluate_activity.dart';
 import 'activity_monitor_dependencies.dart';
 import 'activity_monitor_state.dart';
 
 class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
   final _window = const ActivityWindow();
+  final _evaluateActivity = const EvaluateActivity();
 
   StreamSubscription<BackgroundMonitoringStatus>? _backgroundSubscription;
   var _disposed = false;
@@ -42,31 +44,45 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
       final permissions = await ref
           .read(permissionRepositoryProvider)
           .readPermissionSnapshot();
-      final backgroundStatus = await ref
-          .read(backgroundMonitoringCoordinatorProvider)
-          .scheduleWeekdayMonitoring();
+      final backgroundCoordinator = ref.read(
+        backgroundMonitoringCoordinatorProvider,
+      );
+      final backgroundStatus = onboardingCompleted
+          ? await backgroundCoordinator.scheduleWeekdayMonitoring()
+          : await backgroundCoordinator.currentStatus();
       final healthConnectStepStatus = await ref
           .read(healthConnectPlatformServiceProvider)
           .currentStatus();
+      final restoredSession = _restoreEvaluationIfNeeded(
+        backgroundStatus.lastSession,
+        settings,
+      );
+      final restoredBackgroundStatus = backgroundStatus.copyWith(
+        lastSession: restoredSession,
+      );
 
       _setState(
         state.copyWith(
           settings: settings,
           permissions: permissions,
-          session: backgroundStatus.lastSession,
-          backgroundStatus: backgroundStatus,
+          session: restoredSession,
+          backgroundStatus: restoredBackgroundStatus,
           healthConnectStepStatus: healthConnectStepStatus,
           isLoading: false,
           isInitialized: true,
           isOnboardingVisible: !onboardingCompleted,
           isOnboardingCompleted: onboardingCompleted,
-          statusMessage: backgroundStatus.isScheduled
+          statusMessage: !onboardingCompleted
+              ? '첫 설정을 완료하면 평일 자동 기록을 예약해요'
+              : backgroundStatus.isScheduled
               ? '평일 백그라운드 측정이 예약됐어요'
               : '앱 실행 중 측정을 준비했어요',
           clearError: true,
         ),
       );
-      await syncSchedule();
+      if (onboardingCompleted) {
+        await syncSchedule();
+      }
     } on Object catch (error) {
       _setState(
         state.copyWith(
@@ -89,19 +105,31 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
     _setState(state.copyWith(isOnboardingVisible: false, clearError: true));
   }
 
-  Future<void> completeOnboarding() async {
+  Future<bool> completeOnboarding() async {
     _setState(state.copyWith(isSaving: true, clearError: true));
     try {
       await ref.read(onboardingRepositoryProvider).markCompleted();
+      final backgroundStatus = await ref
+          .read(backgroundMonitoringCoordinatorProvider)
+          .scheduleWeekdayMonitoring();
+      final restoredSession = _restoreEvaluationIfNeeded(
+        backgroundStatus.lastSession,
+        state.settings,
+      );
       _setState(
         state.copyWith(
           isSaving: false,
           isOnboardingVisible: false,
           isOnboardingCompleted: true,
-          statusMessage: '첫 설정을 완료했어요',
+          session: restoredSession,
+          backgroundStatus: backgroundStatus.copyWith(
+            lastSession: restoredSession,
+          ),
+          statusMessage: '첫 설정을 완료하고 평일 자동 기록을 예약했어요',
           clearError: true,
         ),
       );
+      return true;
     } on Object catch (error) {
       _setState(
         state.copyWith(
@@ -109,33 +137,47 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
           errorMessage: '튜토리얼 완료 상태를 저장하지 못했어요: $error',
         ),
       );
+      return false;
     }
   }
 
-  Future<void> saveSettings(ActivityMonitorSettings settings) async {
+  Future<bool> saveSettings(
+    ActivityMonitorSettings settings, {
+    bool schedule = true,
+  }) async {
     _setState(state.copyWith(isSaving: true, clearError: true));
     try {
       await ref.read(settingsRepositoryProvider).saveSettings(settings);
-      final backgroundStatus = await ref
-          .read(backgroundMonitoringCoordinatorProvider)
-          .scheduleWeekdayMonitoring();
+      final coordinator = ref.read(backgroundMonitoringCoordinatorProvider);
+      final backgroundStatus = schedule
+          ? await coordinator.scheduleWeekdayMonitoring()
+          : await coordinator.currentStatus();
+      final restoredSession = _restoreEvaluationIfNeeded(
+        backgroundStatus.lastSession,
+        settings,
+      );
       _setState(
         state.copyWith(
           settings: settings,
-          backgroundStatus: backgroundStatus,
+          session: restoredSession,
+          backgroundStatus: backgroundStatus.copyWith(
+            lastSession: restoredSession,
+          ),
           isSaving: false,
-          statusMessage: '설정을 저장하고 일정을 갱신했어요',
+          statusMessage: schedule ? '설정을 저장하고 일정을 갱신했어요' : '설정을 저장했어요',
           clearError: true,
         ),
       );
+      return true;
     } on Object catch (error) {
       _setState(
         state.copyWith(isSaving: false, errorMessage: '설정을 저장하지 못했어요: $error'),
       );
+      return false;
     }
   }
 
-  Future<void> requestPermissions() async {
+  Future<bool> requestPermissions() async {
     _setState(state.copyWith(isLoading: true, clearError: true));
     try {
       final permissions = await ref
@@ -144,25 +186,37 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
       final healthConnectStepStatus = await ref
           .read(healthConnectPlatformServiceProvider)
           .requestReadStepsPermission();
-      final backgroundStatus = await ref
-          .read(backgroundMonitoringCoordinatorProvider)
-          .scheduleWeekdayMonitoring();
+      final coordinator = ref.read(backgroundMonitoringCoordinatorProvider);
+      final backgroundStatus = state.isOnboardingCompleted
+          ? await coordinator.scheduleWeekdayMonitoring()
+          : await coordinator.currentStatus();
+      final restoredSession = _restoreEvaluationIfNeeded(
+        backgroundStatus.lastSession,
+        state.settings,
+      );
       _setState(
         state.copyWith(
           permissions: permissions,
-          backgroundStatus: backgroundStatus,
+          session: restoredSession,
+          backgroundStatus: backgroundStatus.copyWith(
+            lastSession: restoredSession,
+          ),
           healthConnectStepStatus: healthConnectStepStatus,
           isLoading: false,
           statusMessage: permissions.requiredPermissionsGranted
-              ? '권한을 확인하고 일정을 갱신했어요'
+              ? state.isOnboardingCompleted
+                    ? '권한을 확인하고 일정을 갱신했어요'
+                    : '권한을 확인했어요. 첫 설정을 마치면 자동 기록을 예약해요'
               : '필요한 권한이 부족해요: ${permissions.missingLabels.join(', ')}',
           clearError: true,
         ),
       );
+      return true;
     } on Object catch (error) {
       _setState(
         state.copyWith(isLoading: false, errorMessage: '권한 요청에 실패했어요: $error'),
       );
+      return false;
     }
   }
 
@@ -173,12 +227,18 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
     final healthConnectStepStatus = await ref
         .read(healthConnectPlatformServiceProvider)
         .currentStatus();
+    final restoredSession = _restoreEvaluationIfNeeded(
+      backgroundStatus.lastSession,
+      state.settings,
+    );
 
     _setState(
       state.copyWith(
         now: now,
-        session: backgroundStatus.lastSession,
-        backgroundStatus: backgroundStatus,
+        session: restoredSession,
+        backgroundStatus: backgroundStatus.copyWith(
+          lastSession: restoredSession,
+        ),
         healthConnectStepStatus: healthConnectStepStatus,
       ),
     );
@@ -293,10 +353,10 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
           isLoading: false,
           lastDeliveryResult: result,
           statusMessage: result.smsSent
-              ? '보호자 미리보기 문자를 보냈어요'
+              ? '보호자 테스트 문자를 보냈어요'
               : result.smsFallbackOpened
               ? '문자 앱을 열었어요. 내용을 확인한 뒤 전송해 주세요'
-              : result.errorMessage ?? '미리보기 문자 전송을 완료하지 못했어요',
+              : result.errorMessage ?? '테스트 문자 전송을 완료하지 못했어요',
           errorMessage: result.errorMessage,
           clearError: result.errorMessage == null,
         ),
@@ -305,7 +365,7 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
       _setState(
         state.copyWith(
           isLoading: false,
-          errorMessage: '미리보기 문자 전송에 실패했어요: $error',
+          errorMessage: '테스트 문자 전송에 실패했어요: $error',
         ),
       );
     }
@@ -322,11 +382,39 @@ class ActivityMonitorViewModel extends Notifier<ActivityMonitorState> {
   }
 
   void _handleBackgroundStatus(BackgroundMonitoringStatus backgroundStatus) {
+    final restoredSession = _restoreEvaluationIfNeeded(
+      backgroundStatus.lastSession,
+      state.settings,
+    );
     _setState(
       state.copyWith(
-        backgroundStatus: backgroundStatus,
-        session: backgroundStatus.lastSession,
+        backgroundStatus: backgroundStatus.copyWith(
+          lastSession: restoredSession,
+        ),
+        session: restoredSession,
         errorMessage: backgroundStatus.degradedReason,
+      ),
+    );
+  }
+
+  ActivitySession _restoreEvaluationIfNeeded(
+    ActivitySession session,
+    ActivityMonitorSettings settings,
+  ) {
+    if (session.status != ActivitySessionStatus.evaluated ||
+        session.evaluation != null) {
+      return session;
+    }
+
+    final evaluatedAt = session.endedAt ?? ref.read(clockProvider).now();
+    return session.copyWith(
+      evaluation: _evaluateActivity(
+        steps: session.steps,
+        distanceMeters: session.distanceMeters,
+        elevationGainMeters: session.elevationGainMeters,
+        threshold: settings.threshold,
+        goalPolicy: settings.goalPolicy,
+        evaluatedAt: evaluatedAt,
       ),
     );
   }

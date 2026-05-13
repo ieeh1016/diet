@@ -127,6 +127,7 @@ void main() {
   test('onboarding completion is saved and hides onboarding', () async {
     final onboardingRepository = FakeOnboardingRepository();
     final sensorRepository = FakeSensorRepository();
+    final coordinator = FakeBackgroundMonitoringCoordinator();
     final container = ProviderContainer(
       overrides: [
         clockProvider.overrideWithValue(
@@ -144,9 +145,7 @@ void main() {
           FakeHealthConnectPlatformService(),
         ),
         alertRepositoryProvider.overrideWithValue(FakeAlertRepository()),
-        backgroundMonitoringCoordinatorProvider.overrideWithValue(
-          FakeBackgroundMonitoringCoordinator(),
-        ),
+        backgroundMonitoringCoordinatorProvider.overrideWithValue(coordinator),
       ],
     );
     addTearDown(container.dispose);
@@ -159,6 +158,7 @@ void main() {
       container.read(activityMonitorViewModelProvider).isOnboardingVisible,
       isTrue,
     );
+    expect(coordinator.scheduleCount, 0);
 
     await container
         .read(activityMonitorViewModelProvider.notifier)
@@ -167,6 +167,7 @@ void main() {
     final state = container.read(activityMonitorViewModelProvider);
     expect(onboardingRepository.completed, isTrue);
     expect(onboardingRepository.markCompletedCount, 1);
+    expect(coordinator.scheduleCount, 1);
     expect(state.isOnboardingVisible, isFalse);
     expect(state.isOnboardingCompleted, isTrue);
   });

@@ -82,6 +82,8 @@ void main() {
     final session = await store.loadSession();
     expect(session.steps, 0);
     expect(session.distanceMeters, 0);
+    expect(session.rejectedStationarySegmentCount, 1);
+    expect(session.ignoredStepCount, 40);
   });
 
   test('보행 가능한 GPS 이동일 때만 해당 구간 걸음수를 반영한다', () async {
@@ -118,6 +120,8 @@ void main() {
     expect(session.steps, 40);
     expect(session.distanceMeters, greaterThan(40));
     expect(session.distanceMeters, lessThan(45));
+    expect(session.acceptedGpsSegmentCount, 1);
+    expect(session.rejectedGpsSegmentCount, 0);
   });
 
   test('GPS 이동이 너무 크면 탑승 등 이상 상태로 보고 걸음수를 버린다', () async {
@@ -153,6 +157,43 @@ void main() {
     final session = await store.loadSession();
     expect(session.steps, 0);
     expect(session.distanceMeters, 0);
+    expect(session.rejectedFastSegmentCount, 1);
+    expect(session.ignoredStepCount, 40);
+  });
+
+  test('GPS 정확도가 낮으면 해당 샘플과 걸음수를 제외한다', () async {
+    final clock = FakeClock(DateTime(2026, 5, 12, 11));
+    final sensors = FakeSensorRepository();
+    final store = FakeSessionStore();
+    final coordinator = DeviceBackgroundMonitoringCoordinator(
+      clock: clock as Clock,
+      sensorRepository: sensors,
+      sessionStore: store,
+      alertRepository: FakeAlertRepository(),
+      platformService: _FakeBackgroundMonitoringPlatformService(
+        ActivitySession.active(DateTime(2026, 5, 12, 11)),
+      ),
+    );
+    addTearDown(coordinator.dispose);
+    addTearDown(sensors.dispose);
+
+    await coordinator.startWindow(ActivityMonitorSettings.defaults);
+    sensors.stepController.add(1000);
+    await _flushEvents();
+    sensors.stepController.add(1030);
+    sensors.gpsController.add(
+      _gpsPoint(
+        latitude: 37,
+        timestamp: DateTime(2026, 5, 12, 11, 0, 30),
+        accuracyMeters: 80,
+      ),
+    );
+    await _flushEvents();
+
+    final session = await store.loadSession();
+    expect(session.rejectedPoorAccuracySampleCount, 1);
+    expect(session.ignoredStepCount, 30);
+    expect(session.steps, 0);
   });
 
   test('11시부터 30분 평균 고도를 기준으로 이후 획득고도를 계산한다', () async {
@@ -233,6 +274,7 @@ void main() {
 
     expect(session.evaluation?.requiresAlert, isTrue);
     expect(store.evaluatedDateKey, '2026-5-12');
+    expect(store.alertAttemptedDateKey, '2026-5-12');
     expect(alerts.deliveryCount, 1);
   });
 
@@ -268,6 +310,7 @@ void main() {
     await coordinator.stopAndEvaluate(ActivityMonitorSettings.defaults);
 
     expect(store.evaluatedDateKey, '2026-5-12');
+    expect(store.alertAttemptedDateKey, '2026-5-12');
     expect(alerts.deliveryCount, 0);
   });
 }
@@ -276,11 +319,12 @@ GpsPoint _gpsPoint({
   required double latitude,
   required DateTime timestamp,
   double? altitude,
+  double accuracyMeters = 8,
 }) {
   return GpsPoint(
     latitude: latitude,
     longitude: 127,
-    accuracyMeters: 8,
+    accuracyMeters: accuracyMeters,
     timestamp: timestamp,
     altitudeMeters: altitude,
     altitudeAccuracyMeters: altitude == null ? null : 8,

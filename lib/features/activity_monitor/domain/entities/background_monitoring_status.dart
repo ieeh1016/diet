@@ -1,4 +1,5 @@
 import 'activity_session.dart';
+import 'sms_delivery_snapshot.dart';
 
 enum BackgroundMonitoringMode { foregroundOnly, scheduled, running, degraded }
 
@@ -10,6 +11,7 @@ class BackgroundMonitoringStatus {
     required this.exactAlarmAvailable,
     required this.locationAlwaysGranted,
     required this.lastSession,
+    this.smsDelivery = const SmsDeliverySnapshot.empty(),
     this.degradedReason,
   });
 
@@ -20,6 +22,7 @@ class BackgroundMonitoringStatus {
       exactAlarmAvailable = false,
       locationAlwaysGranted = false,
       lastSession = const ActivitySession.idle(),
+      smsDelivery = const SmsDeliverySnapshot.empty(),
       degradedReason = null;
 
   final BackgroundMonitoringMode mode;
@@ -28,6 +31,7 @@ class BackgroundMonitoringStatus {
   final bool exactAlarmAvailable;
   final bool locationAlwaysGranted;
   final ActivitySession lastSession;
+  final SmsDeliverySnapshot smsDelivery;
   final String? degradedReason;
 
   bool get isDegraded =>
@@ -40,6 +44,7 @@ class BackgroundMonitoringStatus {
     bool? exactAlarmAvailable,
     bool? locationAlwaysGranted,
     ActivitySession? lastSession,
+    SmsDeliverySnapshot? smsDelivery,
     String? degradedReason,
     bool clearDegradedReason = false,
   }) {
@@ -51,6 +56,7 @@ class BackgroundMonitoringStatus {
       locationAlwaysGranted:
           locationAlwaysGranted ?? this.locationAlwaysGranted,
       lastSession: lastSession ?? this.lastSession,
+      smsDelivery: smsDelivery ?? this.smsDelivery,
       degradedReason: clearDegradedReason
           ? null
           : degradedReason ?? this.degradedReason,

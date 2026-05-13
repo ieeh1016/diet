@@ -14,6 +14,15 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
       'background.session.elevation_gain_meters';
   static const _baselineAltitudeMetersKey =
       'background.session.baseline_altitude_meters';
+  static const _acceptedGpsSegmentCountKey =
+      'background.session.accepted_gps_segment_count';
+  static const _rejectedStationarySegmentCountKey =
+      'background.session.rejected_stationary_segment_count';
+  static const _rejectedFastSegmentCountKey =
+      'background.session.rejected_fast_segment_count';
+  static const _rejectedPoorAccuracySampleCountKey =
+      'background.session.rejected_poor_accuracy_sample_count';
+  static const _ignoredStepCountKey = 'background.session.ignored_step_count';
   static const _lastLatitudeKey = 'background.session.last_latitude';
   static const _lastLongitudeKey = 'background.session.last_longitude';
   static const _lastAccuracyKey = 'background.session.last_accuracy';
@@ -21,6 +30,7 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
   static const _stepBaselineKey = 'background.session.step_baseline';
   static const _latestStepCounterKey = 'background.session.latest_step_counter';
   static const _evaluatedDateKey = 'background.session.evaluated_date_key';
+  static const _alertAttemptedDateKey = 'alert.attempted_date_key';
 
   @override
   Future<ActivitySession> loadSession() async {
@@ -42,6 +52,15 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
       distanceMeters: preferences.getDouble(_distanceMetersKey) ?? 0,
       elevationGainMeters: preferences.getDouble(_elevationGainMetersKey) ?? 0,
       baselineAltitudeMeters: preferences.getDouble(_baselineAltitudeMetersKey),
+      acceptedGpsSegmentCount:
+          preferences.getInt(_acceptedGpsSegmentCountKey) ?? 0,
+      rejectedStationarySegmentCount:
+          preferences.getInt(_rejectedStationarySegmentCountKey) ?? 0,
+      rejectedFastSegmentCount:
+          preferences.getInt(_rejectedFastSegmentCountKey) ?? 0,
+      rejectedPoorAccuracySampleCount:
+          preferences.getInt(_rejectedPoorAccuracySampleCountKey) ?? 0,
+      ignoredStepCount: preferences.getInt(_ignoredStepCountKey) ?? 0,
       evaluation: null,
     );
   }
@@ -56,6 +75,23 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
       _elevationGainMetersKey,
       session.elevationGainMeters,
     );
+    await preferences.setInt(
+      _acceptedGpsSegmentCountKey,
+      session.acceptedGpsSegmentCount,
+    );
+    await preferences.setInt(
+      _rejectedStationarySegmentCountKey,
+      session.rejectedStationarySegmentCount,
+    );
+    await preferences.setInt(
+      _rejectedFastSegmentCountKey,
+      session.rejectedFastSegmentCount,
+    );
+    await preferences.setInt(
+      _rejectedPoorAccuracySampleCountKey,
+      session.rejectedPoorAccuracySampleCount,
+    );
+    await preferences.setInt(_ignoredStepCountKey, session.ignoredStepCount);
 
     if (session.startedAt case final startedAt?) {
       await preferences.setString(_startedAtKey, startedAt.toIso8601String());
@@ -133,6 +169,18 @@ class SharedPreferencesActivitySessionStore implements ActivitySessionStore {
   Future<void> saveEvaluatedDateKey(String dateKey) async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.setString(_evaluatedDateKey, dateKey);
+  }
+
+  @override
+  Future<String?> loadAlertAttemptedDateKey() async {
+    final preferences = await SharedPreferences.getInstance();
+    return preferences.getString(_alertAttemptedDateKey);
+  }
+
+  @override
+  Future<void> saveAlertAttemptedDateKey(String dateKey) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(_alertAttemptedDateKey, dateKey);
   }
 
   @override

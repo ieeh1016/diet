@@ -20,6 +20,13 @@ object LunchActivityScheduler {
         scheduleWindow(context, startMillis, endMillis)
     }
 
+    fun isScheduleEnabled(context: Context): Boolean {
+        return BackgroundPrefs.prefs(context).getBoolean(
+            BackgroundPrefs.flutterKey(BackgroundPrefs.keyIsScheduled),
+            false
+        )
+    }
+
     fun scheduleWindow(context: Context, startMillis: Long, endMillis: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         schedule(alarmManager, context, actionStart, requestStart, startMillis)

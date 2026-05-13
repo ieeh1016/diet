@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../../features/activity_monitor/domain/entities/activity_session.dart';
 import '../../features/activity_monitor/domain/entities/background_monitoring_status.dart';
 import '../../features/activity_monitor/domain/entities/monitoring_window.dart';
+import '../../features/activity_monitor/domain/entities/sms_delivery_snapshot.dart';
 
 class BackgroundMonitoringPlatformService {
   static const _channel = MethodChannel('diet/background_monitoring');
@@ -98,6 +99,7 @@ class BackgroundMonitoringPlatformService {
       exactAlarmAvailable: map['exactAlarmAvailable'] == true,
       locationAlwaysGranted: map['locationAlwaysGranted'] == true,
       lastSession: _sessionFromMap(map),
+      smsDelivery: _smsDeliveryFromMap(map),
       degradedReason: degradedReason,
     );
   }
@@ -122,7 +124,27 @@ class BackgroundMonitoringPlatformService {
       baselineAltitudeMeters: _nullableDoubleFrom(
         map['baselineAltitudeMeters'],
       ),
+      acceptedGpsSegmentCount: _intFrom(map['acceptedGpsSegmentCount']),
+      rejectedStationarySegmentCount: _intFrom(
+        map['rejectedStationarySegmentCount'],
+      ),
+      rejectedFastSegmentCount: _intFrom(map['rejectedFastSegmentCount']),
+      rejectedPoorAccuracySampleCount: _intFrom(
+        map['rejectedPoorAccuracySampleCount'],
+      ),
+      ignoredStepCount: _intFrom(map['ignoredStepCount']),
       evaluation: null,
+    );
+  }
+
+  SmsDeliverySnapshot _smsDeliveryFromMap(Map<String, Object?> map) {
+    return SmsDeliverySnapshot(
+      status: map['smsLastStatus'] as String?,
+      error: map['smsLastError'] as String?,
+      attemptedAt: _dateFromMillis(map['smsLastAttemptedAtMillis']),
+      sentAt: _dateFromMillis(map['smsLastSentAtMillis']),
+      phoneNumber: map['smsLastPhone'] as String?,
+      dateKey: map['smsLastDateKey'] as String?,
     );
   }
 

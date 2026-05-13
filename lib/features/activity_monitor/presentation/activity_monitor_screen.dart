@@ -6,12 +6,15 @@ import '../../../../core/design/toss_theme.dart';
 import '../../../../core/permissions/permission_snapshot.dart';
 import '../../../../core/time/activity_window.dart';
 import '../domain/entities/activity_evaluation.dart';
+import '../domain/entities/activity_goal_policy.dart';
 import '../domain/entities/activity_monitor_settings.dart';
 import '../domain/entities/activity_session.dart';
 import '../domain/entities/activity_threshold.dart';
+import '../domain/entities/alert_delivery_result.dart';
 import '../domain/entities/background_monitoring_status.dart';
 import '../domain/entities/emergency_contact.dart';
 import '../domain/entities/health_connect_step_status.dart';
+import '../domain/entities/sms_delivery_snapshot.dart';
 import '../domain/use_cases/build_alert_message.dart';
 import 'activity_monitor_providers.dart';
 import 'activity_monitor_state.dart';
@@ -71,15 +74,23 @@ class _ActivityMonitorScreenState extends ConsumerState<ActivityMonitorScreen> {
                 ),
                 _StatusOverview(state: state),
                 const _SectionGap(),
+                _MeasurementDetailSection(
+                  session: state.session,
+                  healthConnectStepStatus: state.healthConnectStepStatus,
+                ),
+                const _SectionGap(),
+                _RecentRecordSection(session: state.session),
+                const _SectionGap(),
                 _ActionSection(state: state, viewModel: viewModel),
               ],
             ),
             _TabPage(
               key: const PageStorageKey<String>('goal_tab'),
               children: [
-                const _TabPageHeader(
+                _TabPageHeader(
                   title: '목표 관리',
-                  description: '세 가지 목표를 모두 넘으면 보호자 연락이 필요하지 않아요.',
+                  description:
+                      '${state.settings.goalPolicy.description}이에요. 필요하면 목표 항목을 바꿀 수 있어요.',
                   icon: Icons.flag_rounded,
                 ),
                 _MetricsSection(
@@ -87,6 +98,17 @@ class _ActivityMonitorScreenState extends ConsumerState<ActivityMonitorScreen> {
                   settings: state.settings,
                   viewModel: viewModel,
                 ),
+              ],
+            ),
+            _TabPage(
+              key: const PageStorageKey<String>('rules_tab'),
+              children: [
+                const _TabPageHeader(
+                  title: '측정 규칙',
+                  description: '자동 기록, 걸음수 필터, GPS 제한을 숫자 기준까지 확인해요.',
+                  icon: Icons.rule_rounded,
+                ),
+                _RuleGuideSection(settings: state.settings),
               ],
             ),
             _TabPage(
@@ -98,6 +120,11 @@ class _ActivityMonitorScreenState extends ConsumerState<ActivityMonitorScreen> {
                   icon: Icons.contact_phone_rounded,
                 ),
                 _GuardianSection(state: state, viewModel: viewModel),
+                const _SectionGap(),
+                _SmsDeliveryStatusSection(
+                  smsDelivery: state.backgroundStatus.smsDelivery,
+                  lastDeliveryResult: state.lastDeliveryResult,
+                ),
                 const _SectionGap(),
                 ActivitySettingsForm(settings: state.settings),
               ],
@@ -145,6 +172,11 @@ class _ActivityMonitorScreenState extends ConsumerState<ActivityMonitorScreen> {
               icon: Icon(Icons.flag_outlined),
               selectedIcon: Icon(Icons.flag_rounded),
               label: '목표',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.rule_outlined),
+              selectedIcon: Icon(Icons.rule_rounded),
+              label: '규칙',
             ),
             NavigationDestination(
               icon: Icon(Icons.contact_phone_outlined),
@@ -275,6 +307,8 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
   late final TextEditingController _nameController;
   late final TextEditingController _phoneController;
   late final TextEditingController _messageController;
+  late Set<ActivityGoalMetric> _goalMetrics;
+  late ActivityGoalMatchMode _goalMatchMode;
   var _currentStep = 0;
   var _guardianSaved = false;
 
@@ -300,6 +334,10 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
     _messageController = TextEditingController(
       text: settings.resolvedAlertMessageTemplate,
     );
+    _goalMetrics = Set<ActivityGoalMetric>.from(
+      settings.goalPolicy.normalizedMetrics,
+    );
+    _goalMatchMode = settings.goalPolicy.matchMode;
     _messageController.addListener(_refresh);
     _stepsController.addListener(_refresh);
     _distanceController.addListener(_refresh);
@@ -496,7 +534,7 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
     return _OnboardingStepShell(
       icon: Icons.flag_rounded,
       title: '점심 시간 최소 활동 목표',
-      description: '13시에 이 목표보다 낮으면 보호자 연락을 준비해요.',
+      description: '13시에 설정한 기준 이하이면 보호자 연락을 준비해요.',
       children: [
         Form(
           key: _goalFormKey,
@@ -531,10 +569,21 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
           ),
         ),
         const SizedBox(height: 14),
+        _GoalPolicyEditor(
+          selectedMetrics: _goalMetrics,
+          matchMode: _goalMatchMode,
+          onMetricsChanged: (metrics) {
+            setState(() => _goalMetrics = metrics);
+          },
+          onMatchModeChanged: (mode) {
+            setState(() => _goalMatchMode = mode);
+          },
+        ),
+        const SizedBox(height: 14),
         _OnboardingHighlight(
           title: '현재 입력값',
           description:
-              '${_stepsController.text.trim()}걸음, ${_distanceController.text.trim()}km, 획득고도 ${_elevationController.text.trim()}m 이상이면 보호자 연락이 필요하지 않아요.',
+              '${_stepsController.text.trim()}걸음, ${_distanceController.text.trim()}km, 획득고도 ${_elevationController.text.trim()}m 기준으로 ${_currentGoalPolicy().description}이에요. 기준값 이하, 즉 같음 포함이면 미달로 봐요.',
           icon: Icons.check_circle_rounded,
         ),
       ],
@@ -591,6 +640,7 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
             _TemplateTokenChip(label: '{minimumDistanceKm}'),
             _TemplateTokenChip(label: '{elevationGainMeters}'),
             _TemplateTokenChip(label: '{minimumElevationGainMeters}'),
+            _TemplateTokenChip(label: '{goalPolicy}'),
           ],
         ),
         const SizedBox(height: 12),
@@ -620,7 +670,7 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
   String _primaryLabel() {
     return switch (_currentStep) {
       0 => '다음',
-      1 => '권한 허용하고 계속',
+      1 => '권한 확인하고 계속',
       2 => '목표 저장하고 계속',
       _ => _guardianSaved ? '시작하기' : '보호자 설정 저장',
     };
@@ -632,8 +682,8 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
       return;
     }
     if (_currentStep == 1) {
-      await widget.viewModel.requestPermissions();
-      if (mounted) {
+      final saved = await widget.viewModel.requestPermissions();
+      if (mounted && saved) {
         _nextStep();
       }
       return;
@@ -663,9 +713,13 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
           _elevationController.text.trim(),
         ),
       ),
+      goalPolicy: _currentGoalPolicy(),
     );
-    await widget.viewModel.saveSettings(settings);
-    if (mounted) {
+    final saved = await widget.viewModel.saveSettings(
+      settings,
+      schedule: false,
+    );
+    if (mounted && saved) {
       _nextStep();
     }
   }
@@ -682,8 +736,11 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
       ),
       alertMessageTemplate: _messageController.text.trim(),
     );
-    await widget.viewModel.saveSettings(settings);
-    if (mounted) {
+    final saved = await widget.viewModel.saveSettings(
+      settings,
+      schedule: false,
+    );
+    if (mounted && saved) {
       setState(() => _guardianSaved = true);
     }
   }
@@ -729,6 +786,7 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
     final threshold = _currentThreshold();
     final settings = widget.state.settings.copyWith(
       threshold: threshold,
+      goalPolicy: _currentGoalPolicy(),
       emergencyContact: EmergencyContact(
         name: _nameController.text.trim(),
         phoneNumber: _phoneController.text.trim(),
@@ -740,6 +798,7 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
       distanceMeters: threshold.minimumDistanceMeters * 0.7,
       elevationGainMeters: threshold.minimumElevationGainMeters * 0.7,
       threshold: threshold,
+      goalPolicy: settings.goalPolicy,
       evaluatedAt: DateTime.now(),
     );
     return const BuildAlertMessage()(
@@ -766,9 +825,16 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
     );
   }
 
+  ActivityGoalPolicy _currentGoalPolicy() {
+    return ActivityGoalPolicy(metrics: _goalMetrics, matchMode: _goalMatchMode);
+  }
+
   String? _validateContactName(String? value) {
     final name = value?.trim() ?? '';
     final phone = _phoneController.text.trim();
+    if (name.isEmpty) {
+      return '보호자 이름을 입력해 주세요.';
+    }
     if (phone.isNotEmpty && name.isEmpty) {
       return '연락처 이름을 입력해 주세요.';
     }
@@ -778,11 +844,11 @@ class _OnboardingFlowState extends State<_OnboardingFlow> {
   String? _validatePhone(String? value) {
     final phone = value?.trim() ?? '';
     final name = _nameController.text.trim();
+    if (phone.isEmpty) {
+      return '보호자 전화번호를 입력해 주세요.';
+    }
     if (name.isNotEmpty && phone.isEmpty) {
       return '전화번호를 입력해 주세요.';
-    }
-    if (phone.isEmpty) {
-      return null;
     }
     final normalized = phone.replaceAll(RegExp(r'[\s-]'), '');
     if (!RegExp(r'^\+?\d{7,15}$').hasMatch(normalized)) {
@@ -1265,6 +1331,445 @@ class _SummaryItem extends StatelessWidget {
   }
 }
 
+class _MeasurementDetailSection extends StatelessWidget {
+  const _MeasurementDetailSection({
+    required this.session,
+    required this.healthConnectStepStatus,
+  });
+
+  final ActivitySession session;
+  final HealthConnectStepStatus healthConnectStepStatus;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(
+            title: '측정 상세',
+            description: '오늘 기록에 실제로 반영되거나 제외된 구간을 보여줘요.',
+          ),
+          const SizedBox(height: 12),
+          _MeasurementReliabilityBanner(session: session),
+          const SizedBox(height: 12),
+          _MeasurementQuickStats(session: session),
+          const SizedBox(height: 12),
+          _InfoRow(
+            icon: Icons.check_circle_rounded,
+            title: '자세한 제외 사유',
+            value: '보기',
+            color: TossColors.blue,
+            trailing: TextButton(
+              onPressed: () => _openDetailSheet(context),
+              child: const Text('상세 보기'),
+            ),
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.health_and_safety_rounded,
+            title: 'Health Connect 보정',
+            value: healthConnectStepStatus.label,
+            color:
+                healthConnectStepStatus.available &&
+                    healthConnectStepStatus.readPermissionGranted
+                ? TossColors.green
+                : healthConnectStepStatus.available
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+          if (healthConnectStepStatus.message != null) ...[
+            const SizedBox(height: 12),
+            _NoticeStrip(
+              message: healthConnectStepStatus.message!,
+              color: TossColors.gray700,
+              backgroundColor: TossColors.gray50,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openDetailSheet(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: TossColors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+      ),
+      builder: (context) => _MeasurementDetailSheet(
+        session: session,
+        healthConnectStepStatus: healthConnectStepStatus,
+      ),
+    );
+  }
+}
+
+class _MeasurementQuickStats extends StatelessWidget {
+  const _MeasurementQuickStats({required this.session});
+
+  final ActivitySession session;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _MiniStatTile(
+            label: '반영 구간',
+            value: '${session.acceptedGpsSegmentCount}',
+            unit: '개',
+            color: TossColors.green,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _MiniStatTile(
+            label: '제외 구간',
+            value: '${session.rejectedGpsSegmentCount}',
+            unit: '개',
+            color: session.rejectedGpsSegmentCount > 0
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _MiniStatTile(
+            label: '제외 걸음',
+            value: '${session.ignoredStepCount}',
+            unit: '걸음',
+            color: session.ignoredStepCount > 0
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniStatTile extends StatelessWidget {
+  const _MiniStatTile({
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final String unit;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: TossColors.gray50,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: TossColors.gray500),
+          ),
+          const SizedBox(height: 5),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text.rich(
+              TextSpan(
+                text: value,
+                children: [
+                  TextSpan(
+                    text: unit,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: TossColors.gray500),
+                  ),
+                ],
+              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(color: color, fontSize: 24),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MeasurementDetailSheet extends StatelessWidget {
+  const _MeasurementDetailSheet({
+    required this.session,
+    required this.healthConnectStepStatus,
+  });
+
+  final ActivitySession session;
+  final HealthConnectStepStatus healthConnectStepStatus;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(24, 22, 24, bottomInset + 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Expanded(
+                child: _SectionTitle(
+                  title: '측정 상세 내역',
+                  description: '오늘 기록에 반영된 구간과 제외된 이유를 나눠서 확인해요.',
+                ),
+              ),
+              IconButton(
+                tooltip: '닫기',
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _InfoRow(
+            icon: Icons.check_circle_rounded,
+            title: '정상 반영 GPS 구간',
+            value: '${session.acceptedGpsSegmentCount}개',
+            color: TossColors.green,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.block_rounded,
+            title: '10m 이하 움직임 제외',
+            value: '${session.rejectedStationarySegmentCount}개',
+            color: session.rejectedStationarySegmentCount > 0
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.directions_car_filled_rounded,
+            title: '보행 속도 초과 제외',
+            value: '${session.rejectedFastSegmentCount}개',
+            color: session.rejectedFastSegmentCount > 0
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.location_disabled_rounded,
+            title: 'GPS 정확도 불량 제외',
+            value: '${session.rejectedPoorAccuracySampleCount}개',
+            color: session.rejectedPoorAccuracySampleCount > 0
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.directions_walk_rounded,
+            title: '제외된 구간의 걸음수',
+            value: '${session.ignoredStepCount}걸음',
+            color: session.ignoredStepCount > 0
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.health_and_safety_rounded,
+            title: 'Health Connect 보정',
+            value: healthConnectStepStatus.label,
+            color:
+                healthConnectStepStatus.available &&
+                    healthConnectStepStatus.readPermissionGranted
+                ? TossColors.green
+                : healthConnectStepStatus.available
+                ? TossColors.orange
+                : TossColors.gray500,
+          ),
+          const SizedBox(height: 12),
+          const _NoticeStrip(
+            message: '제외된 구간은 이동거리와 걸음수에 더하지 않아요. 자세한 기준은 규칙 탭에서 확인할 수 있어요.',
+            color: TossColors.gray700,
+            backgroundColor: TossColors.gray50,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MeasurementReliabilityBanner extends StatelessWidget {
+  const _MeasurementReliabilityBanner({required this.session});
+
+  final ActivitySession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final rejectedCount = session.rejectedGpsSegmentCount;
+    final hasIgnoredSteps = session.ignoredStepCount > 0;
+    final color = rejectedCount == 0 && !hasIgnoredSteps
+        ? TossColors.green
+        : TossColors.orange;
+    final title = rejectedCount == 0 && !hasIgnoredSteps
+        ? '기록 신뢰도 양호'
+        : '기록 신뢰도 확인 필요';
+    final description = rejectedCount == 0 && !hasIgnoredSteps
+        ? '제외된 GPS 구간이나 걸음수가 아직 없어요.'
+        : '제외 구간 $rejectedCount개, 제외 걸음수 ${session.ignoredStepCount}걸음이 있어요.';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: TossColors.white,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              rejectedCount == 0 && !hasIgnoredSteps
+                  ? Icons.verified_rounded
+                  : Icons.info_outline_rounded,
+              color: color,
+              size: 21,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(color: TossColors.gray900),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  description,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: TossColors.gray700),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecentRecordSection extends StatelessWidget {
+  const _RecentRecordSection({required this.session});
+
+  final ActivitySession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final evaluation = session.evaluation;
+    final result = evaluation == null
+        ? _sessionStatusText(session)
+        : evaluation.requiresAlert
+        ? '기준 미달'
+        : '성공';
+    final color = evaluation == null
+        ? TossColors.blue
+        : evaluation.requiresAlert
+        ? TossColors.red
+        : TossColors.green;
+
+    return _Section(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(
+            title: '최근 기록',
+            description: '오늘 세션의 시작, 종료, 최종 판단 상태를 한눈에 확인해요.',
+          ),
+          const SizedBox(height: 12),
+          _InfoRow(
+            icon: Icons.play_arrow_rounded,
+            title: '시작 시간',
+            value: _formatTime(session.startedAt),
+            color: TossColors.blue,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.stop_rounded,
+            title: '종료 시간',
+            value: _formatTime(session.endedAt),
+            color: TossColors.gray500,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.fact_check_rounded,
+            title: '최종 판단',
+            value: result,
+            color: color,
+          ),
+          if (evaluation != null && evaluation.alertReasons.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _NoticeStrip(
+              message:
+                  '미달 항목: ${evaluation.alertReasons.map(_reasonLabel).join(', ')}',
+              color: TossColors.red,
+              backgroundColor: TossColors.red50,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _sessionStatusText(ActivitySession session) {
+    return switch (session.status) {
+      ActivitySessionStatus.idle => '대기',
+      ActivitySessionStatus.active => '측정 중',
+      ActivitySessionStatus.evaluated => '평가 완료',
+    };
+  }
+
+  String _formatTime(DateTime? value) {
+    if (value == null) {
+      return '-';
+    }
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String _reasonLabel(String reason) {
+    return switch (reason) {
+      'steps' => '걸음수',
+      'distance' => '이동거리',
+      'elevation' => '획득고도',
+      _ => reason,
+    };
+  }
+}
+
 class _MetricsSection extends StatelessWidget {
   const _MetricsSection({
     required this.session,
@@ -1298,31 +1803,33 @@ class _MetricsSection extends StatelessWidget {
         children: [
           _SectionTitle(
             title: '점심 시간 최소 활동 목표',
-            description: '13시에 오늘 기록이 이 목표보다 낮으면 강한 알림과 보호자 연락을 준비해요.',
+            description: '13시에 오늘 기록이 설정한 기준 이하이면 강한 알림과 보호자 연락을 준비해요.',
             trailing: TextButton(
               onPressed: () => _openGoalEditor(context),
               child: const Text('목표 수정'),
             ),
           ),
           const SizedBox(height: 8),
-          const _GoalRuleBanner(),
+          _GoalRuleBanner(policy: settings.goalPolicy),
           const SizedBox(height: 6),
           _MetricRow(
             icon: Icons.directions_walk_rounded,
             label: '최소 걸음수',
             value: '${session.steps}걸음',
-            target: '${threshold.minimumSteps}걸음 이상',
+            target: '${threshold.minimumSteps}걸음 초과',
             progress: stepProgress,
             color: TossColors.blue,
+            included: settings.goalPolicy.includes(ActivityGoalMetric.steps),
           ),
           const _ListDivider(),
           _MetricRow(
             icon: Icons.route_rounded,
             label: '최소 이동거리',
             value: _formatKilometers(session.distanceMeters),
-            target: '${_formatKilometers(threshold.minimumDistanceMeters)} 이상',
+            target: '${_formatKilometers(threshold.minimumDistanceMeters)} 초과',
             progress: distanceProgress,
             color: TossColors.green,
+            included: settings.goalPolicy.includes(ActivityGoalMetric.distance),
           ),
           const _ListDivider(),
           _MetricRow(
@@ -1330,9 +1837,12 @@ class _MetricsSection extends StatelessWidget {
             label: '최소 획득고도',
             value: '${session.elevationGainMeters.toStringAsFixed(0)}m',
             target:
-                '${threshold.minimumElevationGainMeters.toStringAsFixed(0)}m 이상',
+                '${threshold.minimumElevationGainMeters.toStringAsFixed(0)}m 초과',
             progress: elevationProgress,
             color: TossColors.orange,
+            included: settings.goalPolicy.includes(
+              ActivityGoalMetric.elevation,
+            ),
           ),
           const SizedBox(height: 8),
           const _NoticeStrip(
@@ -1363,8 +1873,10 @@ class _MetricsSection extends StatelessWidget {
       ),
       builder: (context) => _GoalEditSheet(
         settings: settings,
-        onSave: (threshold) {
-          viewModel.saveSettings(settings.copyWith(threshold: threshold));
+        onSave: (threshold, goalPolicy) {
+          viewModel.saveSettings(
+            settings.copyWith(threshold: threshold, goalPolicy: goalPolicy),
+          );
         },
       ),
     );
@@ -1372,7 +1884,9 @@ class _MetricsSection extends StatelessWidget {
 }
 
 class _GoalRuleBanner extends StatelessWidget {
-  const _GoalRuleBanner();
+  const _GoalRuleBanner({required this.policy});
+
+  final ActivityGoalPolicy policy;
 
   @override
   Widget build(BuildContext context) {
@@ -1401,7 +1915,7 @@ class _GoalRuleBanner extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              '통과 기준은 걸음수, 이동거리, 획득고도 모두 목표 이상이에요.',
+              '통과 기준은 ${policy.description}이에요.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: TossColors.gray900,
                 fontWeight: FontWeight.w700,
@@ -1422,6 +1936,7 @@ class _MetricRow extends StatelessWidget {
     required this.target,
     required this.progress,
     required this.color,
+    required this.included,
   });
 
   final IconData icon;
@@ -1430,9 +1945,11 @@ class _MetricRow extends StatelessWidget {
   final String target;
   final double progress;
   final Color color;
+  final bool included;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveColor = included ? color : TossColors.gray500;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 17),
       child: Column(
@@ -1440,7 +1957,7 @@ class _MetricRow extends StatelessWidget {
         children: [
           Row(
             children: [
-              _TinyIcon(icon: icon),
+              _TinyIcon(icon: icon, color: effectiveColor),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -1449,7 +1966,7 @@ class _MetricRow extends StatelessWidget {
                 ),
               ),
               Text(
-                target,
+                included ? target : '평가 제외',
                 style: Theme.of(
                   context,
                 ).textTheme.bodyMedium?.copyWith(color: TossColors.gray500),
@@ -1461,7 +1978,7 @@ class _MetricRow extends StatelessWidget {
             value,
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
               fontSize: 24,
-              color: TossColors.gray900,
+              color: included ? TossColors.gray900 : TossColors.gray500,
             ),
           ),
           const SizedBox(height: 13),
@@ -1471,7 +1988,7 @@ class _MetricRow extends StatelessWidget {
               minHeight: 6,
               value: progress,
               backgroundColor: TossColors.gray100,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
+              valueColor: AlwaysStoppedAnimation<Color>(effectiveColor),
             ),
           ),
         ],
@@ -1484,7 +2001,11 @@ class _GoalEditSheet extends StatefulWidget {
   const _GoalEditSheet({required this.settings, required this.onSave});
 
   final ActivityMonitorSettings settings;
-  final ValueChanged<ActivityThreshold> onSave;
+  final void Function(
+    ActivityThreshold threshold,
+    ActivityGoalPolicy goalPolicy,
+  )
+  onSave;
 
   @override
   State<_GoalEditSheet> createState() => _GoalEditSheetState();
@@ -1495,6 +2016,8 @@ class _GoalEditSheetState extends State<_GoalEditSheet> {
   late final TextEditingController _stepsController;
   late final TextEditingController _distanceController;
   late final TextEditingController _elevationController;
+  late Set<ActivityGoalMetric> _goalMetrics;
+  late ActivityGoalMatchMode _goalMatchMode;
 
   @override
   void initState() {
@@ -1511,6 +2034,10 @@ class _GoalEditSheetState extends State<_GoalEditSheet> {
       text: widget.settings.threshold.minimumElevationGainMeters
           .toStringAsFixed(0),
     );
+    _goalMetrics = Set<ActivityGoalMetric>.from(
+      widget.settings.goalPolicy.normalizedMetrics,
+    );
+    _goalMatchMode = widget.settings.goalPolicy.matchMode;
   }
 
   @override
@@ -1524,7 +2051,7 @@ class _GoalEditSheetState extends State<_GoalEditSheet> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    return Padding(
+    return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(24, 22, 24, bottomInset + 24),
       child: Form(
         key: _formKey,
@@ -1535,7 +2062,7 @@ class _GoalEditSheetState extends State<_GoalEditSheet> {
           children: [
             const _SectionTitle(
               title: '최소 활동 목표 수정',
-              description: '평일 13시에 이 목표보다 낮으면 보호자 연락을 준비해요.',
+              description: '평일 13시에 설정한 기준 이하이면 보호자 연락을 준비해요.',
             ),
             const SizedBox(height: 18),
             TextFormField(
@@ -1563,6 +2090,17 @@ class _GoalEditSheetState extends State<_GoalEditSheet> {
               validator: _validateElevationGain,
             ),
             const SizedBox(height: 16),
+            _GoalPolicyEditor(
+              selectedMetrics: _goalMetrics,
+              matchMode: _goalMatchMode,
+              onMetricsChanged: (metrics) {
+                setState(() => _goalMetrics = metrics);
+              },
+              onMatchModeChanged: (mode) {
+                setState(() => _goalMatchMode = mode);
+              },
+            ),
+            const SizedBox(height: 16),
             FilledButton(onPressed: _save, child: const Text('목표 저장')),
           ],
         ),
@@ -1583,8 +2121,143 @@ class _GoalEditSheetState extends State<_GoalEditSheet> {
         minimumDistanceMeters: distanceKm * 1000,
         minimumElevationGainMeters: elevationGainMeters,
       ),
+      ActivityGoalPolicy(metrics: _goalMetrics, matchMode: _goalMatchMode),
     );
     Navigator.of(context).pop();
+  }
+}
+
+class _GoalPolicyEditor extends StatelessWidget {
+  const _GoalPolicyEditor({
+    required this.selectedMetrics,
+    required this.matchMode,
+    required this.onMetricsChanged,
+    required this.onMatchModeChanged,
+  });
+
+  final Set<ActivityGoalMetric> selectedMetrics;
+  final ActivityGoalMatchMode matchMode;
+  final ValueChanged<Set<ActivityGoalMetric>> onMetricsChanged;
+  final ValueChanged<ActivityGoalMatchMode> onMatchModeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('성공 판정 방식', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 5),
+        Text(
+          '검사할 목표와 성공으로 볼 조건을 정해요.',
+          style: Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(color: TossColors.gray500),
+        ),
+        const SizedBox(height: 12),
+        SegmentedButton<ActivityGoalMatchMode>(
+          segments: const [
+            ButtonSegment(
+              value: ActivityGoalMatchMode.all,
+              label: Text('모두'),
+              icon: Icon(Icons.done_all_rounded),
+            ),
+            ButtonSegment(
+              value: ActivityGoalMatchMode.any,
+              label: Text('하나 이상'),
+              icon: Icon(Icons.check_rounded),
+            ),
+          ],
+          selected: {matchMode},
+          onSelectionChanged: (selection) {
+            onMatchModeChanged(selection.first);
+          },
+        ),
+        const SizedBox(height: 10),
+        for (final metric in ActivityGoalMetric.values) ...[
+          _GoalMetricToggle(
+            metric: metric,
+            selected: selectedMetrics.contains(metric),
+            onChanged: () => _toggleMetric(metric),
+          ),
+          if (metric != ActivityGoalMetric.values.last)
+            const SizedBox(height: 8),
+        ],
+        const SizedBox(height: 10),
+        _NoticeStrip(
+          message: ActivityGoalPolicy(
+            metrics: selectedMetrics,
+            matchMode: matchMode,
+          ).description,
+          color: TossColors.gray700,
+          backgroundColor: TossColors.gray50,
+        ),
+      ],
+    );
+  }
+
+  void _toggleMetric(ActivityGoalMetric metric) {
+    final next = Set<ActivityGoalMetric>.from(selectedMetrics);
+    if (next.contains(metric)) {
+      if (next.length == 1) {
+        return;
+      }
+      next.remove(metric);
+    } else {
+      next.add(metric);
+    }
+    onMetricsChanged(next);
+  }
+}
+
+class _GoalMetricToggle extends StatelessWidget {
+  const _GoalMetricToggle({
+    required this.metric,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final ActivityGoalMetric metric;
+  final bool selected;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? TossColors.blue50 : TossColors.gray50,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: onChanged,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Checkbox(value: selected, onChanged: (_) => onChanged()),
+              const SizedBox(width: 2),
+              _TinyIcon(icon: _metricIcon(metric)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  metric.label,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: selected ? TossColors.gray900 : TossColors.gray500,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _metricIcon(ActivityGoalMetric metric) {
+    return switch (metric) {
+      ActivityGoalMetric.steps => Icons.directions_walk_rounded,
+      ActivityGoalMetric.distance => Icons.route_rounded,
+      ActivityGoalMetric.elevation => Icons.terrain_rounded,
+    };
   }
 }
 
@@ -1652,37 +2325,46 @@ class _ActionSection extends StatelessWidget {
           const _AutomationFlow(),
           const SizedBox(height: 14),
           if (!permissionsReady)
-            _ActionTile(
+            _ActionTaskCard(
               icon: Icons.verified_user_rounded,
-              title: '자동 기록을 위해 권한 허용하기',
-              description: '위치, 걸음수, 알림, 문자 권한이 있어야 11시-13시 기록이 안정적으로 동작해요.',
+              title: '자동 기록 권한 준비',
+              description:
+                  '위치, 걸음수, 알림, 문자 권한을 확인해요. 권한이 부족하면 11시 자동 기록이나 보호자 연락이 제한될 수 있어요.',
+              outcome: '완료 후 준비 탭의 권한 상태와 자동 예약 상태가 갱신돼요.',
+              buttonLabel: '권한 확인하기',
               onPressed: state.isLoading ? null : viewModel.requestPermissions,
               emphasized: true,
             )
           else if (isActive)
-            _ActionTile(
+            _ActionTaskCard(
               icon: Icons.fact_check_rounded,
-              title: '지금까지 기록으로 보호자 연락 여부 확인',
-              description: '현재까지의 걸음수와 이동거리로 최소 활동 목표를 넘었는지 평가해요.',
+              title: '측정 중간에 현재 상태 확인',
+              description: '지금까지 수집된 걸음수, 이동거리, 획득고도로 기준 통과 여부를 미리 계산해요.',
+              outcome: '13시 전 확인은 테스트 성격이에요. 오늘 최종 문자 발송으로 잠그지 않아요.',
+              buttonLabel: '현재 기록 확인',
               onPressed: state.isLoading
                   ? null
                   : viewModel.stopMonitoringAndEvaluate,
               emphasized: true,
             )
           else
-            _ActionTile(
+            _ActionTaskCard(
               icon: Icons.play_arrow_rounded,
-              title: '수동으로 점심 활동 기록 시작',
-              description: '자동 기록이 시작되지 않았거나 테스트가 필요할 때만 눌러요.',
+              title: '지금 바로 기록 시작',
+              description: '자동 시작이 안 됐거나 실제 기기에서 측정 흐름을 테스트할 때 쓰는 수동 시작이에요.',
+              outcome: '누르면 GPS/걸음수 수집이 시작되고 홈의 측정 상세와 최근 기록이 업데이트돼요.',
+              buttonLabel: '기록 시작',
               onPressed: state.isLoading ? null : viewModel.startMonitoring,
               emphasized: true,
             ),
           if (!isActive && permissionsReady) ...[
             const SizedBox(height: 10),
-            _ActionTile(
+            _ActionTaskCard(
               icon: Icons.fact_check_rounded,
-              title: '저장된 오늘 기록으로 바로 확인',
-              description: '기록이 끝난 뒤 보호자 연락이 필요한지 다시 판단해요.',
+              title: '저장된 오늘 기록으로 최종 확인',
+              description: '이미 저장된 오늘 기록을 기준으로 성공/미달 여부를 다시 계산하는 기능이에요.',
+              outcome: '13시 이후 실행하면 오늘 평가로 저장되고, 미달이면 알림과 보호자 문자를 시도해요.',
+              buttonLabel: '오늘 기록 확인',
               onPressed: state.isLoading
                   ? null
                   : viewModel.stopMonitoringAndEvaluate,
@@ -1690,9 +2372,17 @@ class _ActionSection extends StatelessWidget {
           ],
           if (isActive) ...[
             const SizedBox(height: 10),
-            TextButton(
+            _NoticeStrip(
+              message:
+                  '기록 중단은 테스트를 끝낼 때만 사용해요. 누르면 현재 자동 예약도 꺼지므로 다시 예약하려면 새로고침이나 권한 확인을 실행해 주세요.',
+              color: TossColors.orange,
+              backgroundColor: TossColors.orange50,
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
               onPressed: state.isLoading ? null : viewModel.stopMonitoring,
-              child: const Text('기록을 중단하고 자동 예약 끄기'),
+              icon: const Icon(Icons.stop_circle_outlined),
+              label: const Text('기록 중단 및 자동 예약 끄기'),
             ),
           ],
         ],
@@ -1779,11 +2469,13 @@ class _FlowArrow extends StatelessWidget {
   }
 }
 
-class _ActionTile extends StatelessWidget {
-  const _ActionTile({
+class _ActionTaskCard extends StatelessWidget {
+  const _ActionTaskCard({
     required this.icon,
     required this.title,
     required this.description,
+    required this.outcome,
+    required this.buttonLabel,
     required this.onPressed,
     this.emphasized = false,
   });
@@ -1791,6 +2483,8 @@ class _ActionTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String description;
+  final String outcome;
+  final String buttonLabel;
   final VoidCallback? onPressed;
   final bool emphasized;
 
@@ -1798,39 +2492,35 @@ class _ActionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
     final backgroundColor = emphasized && enabled
-        ? TossColors.blue
+        ? TossColors.blue50
         : TossColors.gray50;
-    final titleColor = emphasized && enabled
-        ? TossColors.white
-        : enabled
-        ? TossColors.gray900
+    final titleColor = enabled ? TossColors.gray900 : TossColors.gray500;
+    final descriptionColor = TossColors.gray500;
+    final iconColor = emphasized && enabled
+        ? TossColors.blue
         : TossColors.gray500;
-    final descriptionColor = emphasized && enabled
-        ? TossColors.blue100
-        : TossColors.gray500;
-    final iconBackgroundColor = emphasized && enabled
-        ? TossColors.white.withValues(alpha: 0.14)
-        : TossColors.white;
 
-    return Material(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        onTap: onPressed,
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
                 width: 38,
                 height: 38,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: iconBackgroundColor,
+                  color: TossColors.white,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: titleColor, size: 22),
+                child: Icon(icon, color: iconColor, size: 22),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -1854,11 +2544,239 @@ class _ActionTile extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right_rounded, color: titleColor, size: 22),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _NoticeStrip(
+            message: outcome,
+            color: emphasized && enabled ? TossColors.blue : TossColors.gray700,
+            backgroundColor: TossColors.white,
+          ),
+          const SizedBox(height: 12),
+          emphasized
+              ? FilledButton.icon(
+                  onPressed: onPressed,
+                  icon: Icon(
+                    icon == Icons.play_arrow_rounded
+                        ? Icons.play_arrow_rounded
+                        : Icons.check_rounded,
+                  ),
+                  label: Text(buttonLabel),
+                )
+              : OutlinedButton.icon(
+                  onPressed: onPressed,
+                  icon: const Icon(Icons.fact_check_rounded),
+                  label: Text(buttonLabel),
+                ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RuleGuideSection extends StatelessWidget {
+  const _RuleGuideSection({required this.settings});
+
+  final ActivityMonitorSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(
+            title: '측정 규칙과 제한',
+            description: '앱이 어떤 조건에서 기록하고, 어떤 데이터는 버리는지 정확히 보여드려요.',
+          ),
+          const SizedBox(height: 14),
+          _RuleGroup(
+            icon: Icons.schedule_rounded,
+            title: '자동 기록과 평가',
+            children: [
+              const _RuleItem(
+                icon: Icons.calendar_today_rounded,
+                title: '평일 11:00-13:00만 기록',
+                description:
+                    '기기 로컬 시간 기준이에요. 주말에는 자동 기록하지 않고, 13:00에 최종 평가를 시도해요.',
+              ),
+              _RuleItem(
+                icon: Icons.flag_rounded,
+                title: '현재 성공 판정',
+                description:
+                    '${settings.goalPolicy.description}이에요. 선택하지 않은 항목은 평가에서 제외돼요.',
+              ),
+              const _RuleItem(
+                icon: Icons.priority_high_rounded,
+                title: '기준값 이하이면 미달',
+                description:
+                    '걸음수, 이동거리, 획득고도는 설정값과 같아도 미달로 봐요. 예: 2000걸음 기준이면 2001걸음부터 통과예요.',
+              ),
+            ],
+          ),
+          const _ListDivider(),
+          const _RuleGroup(
+            icon: Icons.gps_fixed_rounded,
+            title: 'GPS와 걸음수 필터',
+            children: [
+              _RuleItem(
+                icon: Icons.location_searching_rounded,
+                title: 'GPS 정확도 50m 초과',
+                description: '위치가 불안정하다고 보고 해당 위치 샘플과 그 구간 걸음수를 반영하지 않아요.',
+              ),
+              _RuleItem(
+                icon: Icons.block_rounded,
+                title: '10m 이하 이동',
+                description:
+                    '30초 기준 10m 이하이면 제자리/실내성 움직임으로 보고 그 구간 걸음수와 이동거리를 무시해요.',
+              ),
+              _RuleItem(
+                icon: Icons.directions_car_filled_rounded,
+                title: '90m 이상 이동',
+                description:
+                    '30초 기준 90m 이상이면 보행 속도 초과로 보고 차량 탑승이나 이상 이동 가능성이 있어 무시해요.',
+              ),
+              _RuleItem(
+                icon: Icons.speed_rounded,
+                title: '시간 간격별 보행 속도',
+                description:
+                    '실제 공식은 최소 0.3m/s, 최대 3.0m/s예요. 기록 간격이 30초가 아니면 이 속도 기준으로 허용 거리가 달라져요.',
+              ),
+            ],
+          ),
+          const _ListDivider(),
+          const _RuleGroup(
+            icon: Icons.terrain_rounded,
+            title: '거리와 고도 계산',
+            children: [
+              _RuleItem(
+                icon: Icons.route_rounded,
+                title: '이동거리',
+                description:
+                    '필터를 통과한 GPS 지점 사이의 직선 거리를 누적해요. 버린 구간의 거리와 걸음수는 더하지 않아요.',
+              ),
+              _RuleItem(
+                icon: Icons.landscape_rounded,
+                title: '획득고도',
+                description:
+                    '11:00-11:30 사이 신뢰 가능한 GPS 고도의 평균을 기준 고도로 잡고, 이후 가장 높은 고도와의 차이를 사용해요.',
+              ),
+              _RuleItem(
+                icon: Icons.height_rounded,
+                title: '고도 정확도 제한',
+                description:
+                    '지원되는 기기에서는 수직 정확도 30m 초과 고도 샘플을 제외해요. 실내나 고층 건물에서는 오차가 커질 수 있어요.',
+              ),
+            ],
+          ),
+          const _ListDivider(),
+          const _RuleGroup(
+            icon: Icons.health_and_safety_rounded,
+            title: '걸음수 보정과 알림',
+            children: [
+              _RuleItem(
+                icon: Icons.sync_rounded,
+                title: 'Health Connect 보정',
+                description:
+                    'Android는 13시에 11:00-13:00 구간 걸음수를 Health Connect에서 최대 10초간 다시 읽어 센서 기록과 병합해요.',
+              ),
+              _RuleItem(
+                icon: Icons.notifications_active_rounded,
+                title: '목표 미달 알림',
+                description:
+                    '성공 판정에 실패하면 강한 로컬 알림을 띄워요. Android는 권한과 보호자 번호가 있으면 문자 발송도 시도해요.',
+              ),
+              _RuleItem(
+                icon: Icons.phone_iphone_rounded,
+                title: 'iOS 제한',
+                description:
+                    'iOS는 자동 문자 발송을 지원하지 않아요. 앱 강제 종료나 백그라운드 제한 상태에서는 13시 정시 실행도 보장되지 않아요.',
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _NoticeStrip(
+            message: defaultTargetPlatform == TargetPlatform.android
+                ? 'Android는 정확 알람 권한이 꺼져 있으면 13시 평가가 지연될 수 있어요. 준비 탭에서 상태를 확인해 주세요.'
+                : 'iOS는 정책상 best-effort로 동작해요. 상시 위치 권한과 백그라운드 갱신 상태가 정확도에 영향을 줘요.',
+            color: TossColors.orange,
+            backgroundColor: TossColors.orange50,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RuleGroup extends StatelessWidget {
+  const _RuleGroup({
+    required this.icon,
+    required this.title,
+    required this.children,
+  });
+
+  final IconData icon;
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _TinyIcon(icon: icon, color: TossColors.blue),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        for (final child in children) ...[child, const SizedBox(height: 10)],
+      ],
+    );
+  }
+}
+
+class _RuleItem extends StatelessWidget {
+  const _RuleItem({
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _TinyIcon(icon: icon),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.bodyLarge),
+              const SizedBox(height: 3),
+              Text(
+                description,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: TossColors.gray500),
+              ),
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 }
@@ -1881,6 +2799,10 @@ class _ReadinessSection extends StatelessWidget {
     final modeColor = backgroundStatus.isDegraded
         ? TossColors.orange
         : TossColors.blue;
+    final requiresExactAlarm = defaultTargetPlatform == TargetPlatform.android;
+    final requiresBackgroundLocation =
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
 
     return _Section(
       child: Column(
@@ -1907,12 +2829,19 @@ class _ReadinessSection extends StatelessWidget {
           _InfoRow(
             icon: Icons.alarm_rounded,
             title: '13시 자동 평가 알람',
-            value: backgroundStatus.exactAlarmAvailable ? '켜짐' : '필요',
-            color: backgroundStatus.exactAlarmAvailable
-                ? TossColors.green
-                : TossColors.orange,
+            value: requiresExactAlarm
+                ? backgroundStatus.exactAlarmAvailable
+                      ? '켜짐'
+                      : '필요'
+                : 'iOS 정책 제한',
+            color: requiresExactAlarm
+                ? backgroundStatus.exactAlarmAvailable
+                      ? TossColors.green
+                      : TossColors.orange
+                : TossColors.gray500,
             trailing:
-                !backgroundStatus.exactAlarmAvailable &&
+                requiresExactAlarm &&
+                    !backgroundStatus.exactAlarmAvailable &&
                     backgroundStatus.isNativeAvailable
                 ? Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1957,6 +2886,19 @@ class _ReadinessSection extends StatelessWidget {
                 ? TossColors.green
                 : TossColors.orange,
           ),
+          if (requiresBackgroundLocation) ...[
+            const _ListDivider(indent: 45),
+            _InfoRow(
+              icon: Icons.my_location_rounded,
+              title: defaultTargetPlatform == TargetPlatform.android
+                  ? '백그라운드 위치 권한'
+                  : '상시 위치 권한',
+              value: backgroundStatus.locationAlwaysGranted ? '허용됨' : '필요',
+              color: backgroundStatus.locationAlwaysGranted
+                  ? TossColors.green
+                  : TossColors.orange,
+            ),
+          ],
           const _ListDivider(indent: 45),
           _InfoRow(
             icon: Icons.directions_run_rounded,
@@ -2028,11 +2970,15 @@ class _ReadinessSection extends StatelessWidget {
 
   List<bool> _readinessChecks() {
     return [
-      !backgroundStatus.isNativeAvailable ||
+      defaultTargetPlatform != TargetPlatform.android ||
+          !backgroundStatus.isNativeAvailable ||
           backgroundStatus.exactAlarmAvailable,
       !healthConnectStepStatus.available ||
           healthConnectStepStatus.readPermissionGranted,
       permissions.locationGranted,
+      (defaultTargetPlatform != TargetPlatform.android &&
+              defaultTargetPlatform != TargetPlatform.iOS) ||
+          backgroundStatus.locationAlwaysGranted,
       permissions.activityGranted,
       permissions.notificationGranted,
       !permissions.smsRequired || permissions.smsGranted,
@@ -2156,14 +3102,14 @@ class _GuardianSection extends StatelessWidget {
           const SizedBox(height: 14),
           _SoftActionButton(
             icon: Icons.sms_rounded,
-            label: '보호자에게 미리보기 문자 보내기',
+            label: '보호자에게 테스트 문자 실제 보내기',
             onPressed: complete && !state.isLoading
                 ? () => _confirmTestMessage(context)
                 : null,
           ),
           const SizedBox(height: 10),
           Text(
-            '저장된 보호자 번호로 현재 문자 문구가 전송돼요.',
+            '저장된 보호자 번호로 실제 SMS가 전송될 수 있어요.',
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: TossColors.gray500),
@@ -2177,8 +3123,8 @@ class _GuardianSection extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('미리보기 문자를 보낼까요?'),
-        content: const Text('저장된 보호자 번호로 현재 문자 문구가 전송될 수 있어요.'),
+        title: const Text('테스트 문자를 실제로 보낼까요?'),
+        content: const Text('저장된 보호자 번호로 현재 문자 문구가 SMS로 전송될 수 있어요.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -2204,6 +3150,134 @@ class _GuardianSection extends StatelessWidget {
     final prefix = digits.substring(0, digits.length - 4);
     final suffix = digits.substring(digits.length - 4);
     return '$prefix-$suffix';
+  }
+}
+
+class _SmsDeliveryStatusSection extends StatelessWidget {
+  const _SmsDeliveryStatusSection({
+    required this.smsDelivery,
+    required this.lastDeliveryResult,
+  });
+
+  final SmsDeliverySnapshot smsDelivery;
+  final AlertDeliveryResult lastDeliveryResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _deliveryLabel();
+    final color = _deliveryColor();
+    return _Section(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(
+            title: '문자 발송 상태',
+            description: '자동 알림이나 테스트 문자가 실제로 어떻게 처리됐는지 보여줘요.',
+          ),
+          const SizedBox(height: 12),
+          _InfoRow(
+            icon: Icons.sms_rounded,
+            title: '최근 문자 상태',
+            value: label,
+            color: color,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.schedule_rounded,
+            title: '마지막 시도',
+            value: _formatDateTime(smsDelivery.attemptedAt),
+            color: TossColors.gray500,
+          ),
+          const _ListDivider(indent: 45),
+          _InfoRow(
+            icon: Icons.phone_rounded,
+            title: '대상 번호',
+            value: _maskPhone(smsDelivery.phoneNumber),
+            color: TossColors.gray500,
+          ),
+          if (_errorMessage() case final error?) ...[
+            const SizedBox(height: 12),
+            _NoticeStrip(
+              message: error,
+              color: TossColors.red,
+              backgroundColor: TossColors.red50,
+            ),
+          ],
+          const SizedBox(height: 12),
+          const _NoticeStrip(
+            message:
+                'Android 자동 문자는 권한, 통신사 상태, 제조사 정책에 따라 실패할 수 있어요. 실패하면 이곳에 사유가 남아요.',
+            color: TossColors.gray700,
+            backgroundColor: TossColors.gray50,
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _deliveryLabel() {
+    if (smsDelivery.hasAttempt) {
+      return smsDelivery.label;
+    }
+    if (lastDeliveryResult.smsSent) {
+      return '미리보기 발송 완료';
+    }
+    if (lastDeliveryResult.smsFallbackOpened) {
+      return '문자 앱 열림';
+    }
+    if (lastDeliveryResult.errorMessage != null) {
+      return '미리보기 실패';
+    }
+    return smsDelivery.label;
+  }
+
+  Color _deliveryColor() {
+    if (smsDelivery.hasAttempt) {
+      if (smsDelivery.sent) {
+        return TossColors.green;
+      }
+      if (smsDelivery.error != null) {
+        return TossColors.red;
+      }
+      return TossColors.orange;
+    }
+    if (lastDeliveryResult.smsSent) {
+      return TossColors.green;
+    }
+    if (lastDeliveryResult.errorMessage != null) {
+      return TossColors.red;
+    }
+    if (lastDeliveryResult.smsFallbackOpened) {
+      return TossColors.orange;
+    }
+    return TossColors.gray500;
+  }
+
+  String? _errorMessage() {
+    return smsDelivery.error ?? lastDeliveryResult.errorMessage;
+  }
+
+  String _formatDateTime(DateTime? value) {
+    if (value == null) {
+      return '-';
+    }
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '$month/$day $hour:$minute';
+  }
+
+  String _maskPhone(String? phone) {
+    final value = phone?.trim() ?? '';
+    if (value.isEmpty) {
+      return '-';
+    }
+    final digits = value.replaceAll(RegExp(r'\D'), '');
+    if (digits.length < 7) {
+      return value;
+    }
+    return '${digits.substring(0, digits.length - 4)}-${digits.substring(digits.length - 4)}';
   }
 }
 
@@ -2352,6 +3426,7 @@ class _ActivitySettingsFormState extends ConsumerState<ActivitySettingsForm> {
                 _TemplateTokenChip(label: '{minimumDistanceKm}'),
                 _TemplateTokenChip(label: '{elevationGainMeters}'),
                 _TemplateTokenChip(label: '{minimumElevationGainMeters}'),
+                _TemplateTokenChip(label: '{goalPolicy}'),
               ],
             ),
             const SizedBox(height: 12),
@@ -2425,6 +3500,7 @@ class _ActivitySettingsFormState extends ConsumerState<ActivitySettingsForm> {
       distanceMeters: threshold.minimumDistanceMeters * 0.7,
       elevationGainMeters: threshold.minimumElevationGainMeters * 0.7,
       threshold: threshold,
+      goalPolicy: previewSettings.goalPolicy,
       evaluatedAt: DateTime.now(),
     );
     return const BuildAlertMessage()(
@@ -2634,9 +3710,10 @@ class _InfoRow extends StatelessWidget {
 }
 
 class _TinyIcon extends StatelessWidget {
-  const _TinyIcon({required this.icon});
+  const _TinyIcon({required this.icon, this.color});
 
   final IconData icon;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -2647,7 +3724,7 @@ class _TinyIcon extends StatelessWidget {
         color: TossColors.gray50,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Icon(icon, size: 18, color: TossColors.gray500),
+      child: Icon(icon, size: 18, color: color ?? TossColors.gray500),
     );
   }
 }

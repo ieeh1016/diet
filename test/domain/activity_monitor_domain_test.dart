@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:diet/core/time/activity_window.dart';
+import 'package:diet/features/activity_monitor/domain/entities/activity_goal_policy.dart';
 import 'package:diet/features/activity_monitor/domain/entities/activity_monitor_settings.dart';
 import 'package:diet/features/activity_monitor/domain/entities/activity_threshold.dart';
 import 'package:diet/features/activity_monitor/domain/entities/gps_point.dart';
@@ -87,6 +88,57 @@ void main() {
     expect(evaluation.isStepBelowThreshold, isTrue);
     expect(evaluation.isDistanceBelowThreshold, isFalse);
     expect(evaluation.requiresAlert, isTrue);
+  });
+
+  test('evaluation can require only selected goals', () {
+    const evaluate = EvaluateActivity();
+    final evaluation = evaluate(
+      steps: 2500,
+      distanceMeters: 300,
+      elevationGainMeters: 10,
+      threshold: ActivityThreshold.defaults,
+      goalPolicy: const ActivityGoalPolicy(metrics: {ActivityGoalMetric.steps}),
+      evaluatedAt: DateTime(2026, 5, 11, 13),
+    );
+
+    expect(evaluation.requiresAlert, isFalse);
+    expect(evaluation.alertReasons, isEmpty);
+  });
+
+  test('default evaluation does not require elevation gain', () {
+    const evaluate = EvaluateActivity();
+    final evaluation = evaluate(
+      steps: 2500,
+      distanceMeters: 1300,
+      elevationGainMeters: 0,
+      threshold: ActivityThreshold.defaults,
+      evaluatedAt: DateTime(2026, 5, 11, 13),
+    );
+
+    expect(evaluation.isElevationGainBelowThreshold, isTrue);
+    expect(evaluation.requiresAlert, isFalse);
+    expect(evaluation.alertReasons, isEmpty);
+  });
+
+  test('evaluation can pass when any selected goal is achieved', () {
+    const evaluate = EvaluateActivity();
+    final evaluation = evaluate(
+      steps: 1200,
+      distanceMeters: 1300,
+      elevationGainMeters: 10,
+      threshold: ActivityThreshold.defaults,
+      goalPolicy: const ActivityGoalPolicy(
+        metrics: {
+          ActivityGoalMetric.steps,
+          ActivityGoalMetric.distance,
+          ActivityGoalMetric.elevation,
+        },
+        matchMode: ActivityGoalMatchMode.any,
+      ),
+      evaluatedAt: DateTime(2026, 5, 11, 13),
+    );
+
+    expect(evaluation.requiresAlert, isFalse);
   });
 
   test('alert message includes measured and configured values', () {

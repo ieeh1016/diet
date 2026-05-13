@@ -137,6 +137,9 @@ class DeviceBackgroundMonitoringCoordinator
     final alreadyEvaluatedToday =
         shouldLockToday &&
         await _sessionStore.loadEvaluatedDateKey() == todayKey;
+    final alertAlreadyAttemptedToday =
+        shouldLockToday &&
+        await _sessionStore.loadAlertAttemptedDateKey() == todayKey;
     final window = _windowForDate(now);
     final nativeSession = await _platformService.stopAndEvaluate(window);
     await _cancelSensorSubscriptions();
@@ -148,6 +151,7 @@ class DeviceBackgroundMonitoringCoordinator
       distanceMeters: mergedSession.distanceMeters,
       elevationGainMeters: mergedSession.elevationGainMeters,
       threshold: settings.threshold,
+      goalPolicy: settings.goalPolicy,
       evaluatedAt: now,
     );
     final evaluatedSession = mergedSession.copyWith(
@@ -162,7 +166,18 @@ class DeviceBackgroundMonitoringCoordinator
     }
     await _sessionStore.clearActiveTracking();
 
-    if (shouldLockToday && evaluation.requiresAlert && !alreadyEvaluatedToday) {
+    if (shouldLockToday &&
+        evaluation.requiresAlert &&
+        alreadyEvaluatedToday &&
+        !alertAlreadyAttemptedToday) {
+      await _sessionStore.saveAlertAttemptedDateKey(todayKey);
+    }
+
+    if (shouldLockToday &&
+        evaluation.requiresAlert &&
+        !alreadyEvaluatedToday &&
+        !alertAlreadyAttemptedToday) {
+      await _sessionStore.saveAlertAttemptedDateKey(todayKey);
       await _alertRepository.deliverEmergencyAlert(
         settings: settings,
         evaluation: evaluation,
@@ -215,7 +230,15 @@ class DeviceBackgroundMonitoringCoordinator
       return;
     }
     if (!point.isReliable) {
+      await _sessionStore.saveSession(
+        session.copyWith(
+          rejectedPoorAccuracySampleCount:
+              session.rejectedPoorAccuracySampleCount + 1,
+          ignoredStepCount: session.ignoredStepCount + _pendingSteps(),
+        ),
+      );
       await _advanceStepCheckpoint();
+      await _emitCurrentStatus();
       return;
     }
 
@@ -238,6 +261,18 @@ class DeviceBackgroundMonitoringCoordinator
     final pendingSteps = _pendingSteps();
     await _advanceStepCheckpoint();
     if (decision != WalkingSampleDecision.accepted) {
+      updatedSession = switch (decision) {
+        WalkingSampleDecision.tooLittleMovement => updatedSession.copyWith(
+          rejectedStationarySegmentCount:
+              updatedSession.rejectedStationarySegmentCount + 1,
+          ignoredStepCount: updatedSession.ignoredStepCount + pendingSteps,
+        ),
+        WalkingSampleDecision.tooFastForWalking => updatedSession.copyWith(
+          rejectedFastSegmentCount: updatedSession.rejectedFastSegmentCount + 1,
+          ignoredStepCount: updatedSession.ignoredStepCount + pendingSteps,
+        ),
+        WalkingSampleDecision.accepted => updatedSession,
+      };
       await _sessionStore.saveSession(updatedSession);
       await _emitCurrentStatus();
       return;
@@ -246,6 +281,7 @@ class DeviceBackgroundMonitoringCoordinator
     updatedSession = updatedSession.copyWith(
       steps: updatedSession.steps + pendingSteps,
       distanceMeters: updatedSession.distanceMeters + addedMeters,
+      acceptedGpsSegmentCount: updatedSession.acceptedGpsSegmentCount + 1,
     );
     await _sessionStore.saveSession(updatedSession);
     await _emitCurrentStatus();
@@ -355,6 +391,26 @@ class DeviceBackgroundMonitoringCoordinator
       ),
       baselineAltitudeMeters:
           native.baselineAltitudeMeters ?? local.baselineAltitudeMeters,
+      acceptedGpsSegmentCount: math.max(
+        local.acceptedGpsSegmentCount,
+        native.acceptedGpsSegmentCount,
+      ),
+      rejectedStationarySegmentCount: math.max(
+        local.rejectedStationarySegmentCount,
+        native.rejectedStationarySegmentCount,
+      ),
+      rejectedFastSegmentCount: math.max(
+        local.rejectedFastSegmentCount,
+        native.rejectedFastSegmentCount,
+      ),
+      rejectedPoorAccuracySampleCount: math.max(
+        local.rejectedPoorAccuracySampleCount,
+        native.rejectedPoorAccuracySampleCount,
+      ),
+      ignoredStepCount: math.max(
+        local.ignoredStepCount,
+        native.ignoredStepCount,
+      ),
       evaluation: local.evaluation ?? native.evaluation,
     );
   }

@@ -85,6 +85,7 @@ class FakeSessionStore implements ActivitySessionStore {
   GpsPoint? lastPoint;
   int? baseline;
   String? evaluatedDateKey;
+  String? alertAttemptedDateKey;
 
   @override
   Future<void> clearActiveTracking() async {
@@ -94,6 +95,9 @@ class FakeSessionStore implements ActivitySessionStore {
 
   @override
   Future<String?> loadEvaluatedDateKey() async => evaluatedDateKey;
+
+  @override
+  Future<String?> loadAlertAttemptedDateKey() async => alertAttemptedDateKey;
 
   @override
   Future<GpsPoint?> loadLastReliablePoint() async => lastPoint;
@@ -107,6 +111,11 @@ class FakeSessionStore implements ActivitySessionStore {
   @override
   Future<void> saveEvaluatedDateKey(String dateKey) async {
     evaluatedDateKey = dateKey;
+  }
+
+  @override
+  Future<void> saveAlertAttemptedDateKey(String dateKey) async {
+    alertAttemptedDateKey = dateKey;
   }
 
   @override
@@ -193,6 +202,7 @@ class FakeBackgroundMonitoringCoordinator
       steps: evaluationSession.steps,
       distanceMeters: evaluationSession.distanceMeters,
       threshold: settings.threshold,
+      goalPolicy: settings.goalPolicy,
       evaluatedAt: evaluationSession.endedAt ?? DateTime(2026, 5, 11, 13),
     );
     evaluationSession = evaluationSession.copyWith(evaluation: evaluation);

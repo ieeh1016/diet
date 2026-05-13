@@ -105,11 +105,57 @@ class BackgroundMonitoringBridge(private val context: Context) : MethodChannel.M
                 context,
                 BackgroundPrefs.keyElevationGainMeters
             ),
+            "acceptedGpsSegmentCount" to BackgroundPrefs.getInt(
+                context,
+                BackgroundPrefs.keyAcceptedGpsSegmentCount
+            ),
+            "rejectedStationarySegmentCount" to BackgroundPrefs.getInt(
+                context,
+                BackgroundPrefs.keyRejectedStationarySegmentCount
+            ),
+            "rejectedFastSegmentCount" to BackgroundPrefs.getInt(
+                context,
+                BackgroundPrefs.keyRejectedFastSegmentCount
+            ),
+            "rejectedPoorAccuracySampleCount" to BackgroundPrefs.getInt(
+                context,
+                BackgroundPrefs.keyRejectedPoorAccuracySampleCount
+            ),
+            "ignoredStepCount" to BackgroundPrefs.getInt(
+                context,
+                BackgroundPrefs.keyIgnoredStepCount
+            ),
             "baselineAltitudeMeters" to BackgroundPrefs.getDouble(
                 context,
                 BackgroundPrefs.keyBaselineAltitudeMeters,
                 Double.NaN
-            ).takeUnless { it.isNaN() }
+            ).takeUnless { it.isNaN() },
+            "smsLastStatus" to BackgroundPrefs.getString(
+                context,
+                BackgroundPrefs.keySmsLastStatus,
+                ""
+            ).takeIf { it.isNotBlank() },
+            "smsLastError" to BackgroundPrefs.getString(
+                context,
+                BackgroundPrefs.keySmsLastError,
+                ""
+            ).takeIf { it.isNotBlank() },
+            "smsLastAttemptedAtMillis" to parseIsoMillis(
+                prefs.getString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastAttemptedAt), null)
+            ),
+            "smsLastSentAtMillis" to parseIsoMillis(
+                prefs.getString(BackgroundPrefs.flutterKey(BackgroundPrefs.keySmsLastSentAt), null)
+            ),
+            "smsLastPhone" to BackgroundPrefs.getString(
+                context,
+                BackgroundPrefs.keySmsLastPhone,
+                ""
+            ).takeIf { it.isNotBlank() },
+            "smsLastDateKey" to BackgroundPrefs.getString(
+                context,
+                BackgroundPrefs.keySmsLastDateKey,
+                ""
+            ).takeIf { it.isNotBlank() }
         )
     }
 

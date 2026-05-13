@@ -101,6 +101,7 @@ class DeviceAlertRepository implements AlertRepository {
             elevationGainMeters:
                 settings.threshold.minimumElevationGainMeters * 0.7,
             threshold: settings.threshold,
+            goalPolicy: settings.goalPolicy,
             evaluatedAt: DateTime.now(),
           ),
         ),
@@ -108,7 +109,7 @@ class DeviceAlertRepository implements AlertRepository {
       smsSent = result.sent;
       smsFallbackOpened = result.fallbackOpened;
     } on Object catch (error) {
-      errorMessage = '미리보기 문자 전송에 실패했어요: $error';
+      errorMessage = '테스트 문자 전송에 실패했어요: $error';
     }
 
     return AlertDeliveryResult(
